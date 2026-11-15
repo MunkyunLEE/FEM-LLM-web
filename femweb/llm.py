@@ -75,14 +75,15 @@ def ask_llm(cfg, text, ctx, history=None, error=None):
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": ctx}]
     for h in (history or [])[-6:]:
         msgs.append({"role": h["role"], "content": h["content"]})
-    msgs.append({"role": "user", "content": text})
+    nothink = "qwen3" in str(cfg.get("model", "")).lower() and os.environ.get("FEMWEB_LLM_THINK", "0") != "1"
+    msgs.append({"role": "user", "content": text + (" /no_think" if nothink else "")})
     if error:
         msgs.append({"role": "user", "content": f"The previous ops failed validation: {error}\nReturn corrected JSON."})
     headers = {"Content-Type": "application/json"}
     if cfg.get("key"):
         headers["Authorization"] = "Bearer " + cfg["key"]
     body = {"model": cfg["model"], "messages": msgs, "temperature": 0, "stream": False, "response_format": {"type": "json_object"}}
-    r = httpx.post(cfg["url"].rstrip("/") + "/chat/completions", json=body, headers=headers, timeout=180)
+    r = httpx.post(cfg["url"].rstrip("/") + "/chat/completions", json=body, headers=headers, timeout=900)
     r.raise_for_status()
     data = _extract(r.json()["choices"][0]["message"]["content"])
     ops = data.get("ops", [])

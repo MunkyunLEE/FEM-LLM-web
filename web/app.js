@@ -681,12 +681,25 @@ async function sendChat(text) {
   }
   addMsg('user', text);
   $('chatInput').value = '';
+  const wait = el('div', 'msg bot', '');
+  const t0 = Date.now();
+  const tick = () => {
+    wait.textContent = '처리 중… ' + Math.round((Date.now() - t0) / 1000) + '초 (로컬 LLM은 처음 1~2분 걸릴 수 있습니다)';
+  };
+  tick();
+  const timer = setInterval(tick, 1000);
+  $('chatLog').append(wait);
+  $('chatLog').scrollTop = $('chatLog').scrollHeight;
   try {
     const s = await api('/api/chat', { json: { text } });
+    clearInterval(timer);
+    wait.remove();
     const c = s.chat;
     addMsg('bot', c.reply || (c.ops.length ? '적용했습니다.' : '적용할 내용이 없습니다.'), c);
     await refresh(s, { keepResult: true });
   } catch (e) {
+    clearInterval(timer);
+    wait.remove();
     addMsg('bot', '', { error: e.message });
   }
 }

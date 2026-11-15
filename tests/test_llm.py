@@ -54,6 +54,7 @@ def test_llm_ops_are_validated_and_applied(client):
     assert len(r["spec"]["bcs"]) == 1
     sent = SEEN[0]
     assert sent["model"] == "mock-model" and sent["response_format"] == {"type": "json_object"}
+    assert sent["messages"][-1]["content"].endswith("/no_think")
     assert "MODEL:" in sent["messages"][1]["content"] and '"beam"' in sent["messages"][1]["content"]
 
 
