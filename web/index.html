@@ -1,1 +1,90 @@
-<!doctype html><title>x</title>
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FEM-LLM-web</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports": {"three": "./vendor/three.module.js"}}</script>
+</head>
+<body>
+<div id="app">
+  <aside id="left">
+    <header><h1>FEM<span>·LLM</span></h1><div id="tools"></div></header>
+    <section>
+      <h2>지오메트리</h2>
+      <div class="row"><select id="example"><option value="">예제 선택…</option></select></div>
+      <div class="row two"><button id="loadPreset">예제 + 조건</button><button id="loadGeo" class="ghost">지오메트리만</button></div>
+      <label class="file"><input type="file" id="file" accept=".obj,.stl"><span>OBJ / STL 올리기</span></label>
+      <div class="row two"><label>STL 메쉬 크기 (mm)<input id="stlSize" type="number" min="0" step="any" placeholder="자동"></label><label>요소 분할수<input id="divisions" type="number" min="1" max="64" value="1"></label></div>
+      <div id="modelInfo" class="info">불러온 모델이 없습니다</div>
+    </section>
+    <section>
+      <h2>솔버 · 스텝</h2>
+      <div class="row"><select id="solver"><option value="calculix">CalculiX (바·쉘 FEM)</option><option value="barhinge">바-힌지 (간이 검토)</option><option value="tensormesh">TensorMesh (솔리드)</option></select></div>
+      <div class="row two"><label>해석 종류<select id="stepType"><option value="static">정적</option><option value="buckle">좌굴</option><option value="modal">모달</option><option value="arclength">호장법</option></select></label><label class="check"><input type="checkbox" id="nlgeom">기하비선형</label></div>
+      <div class="row three"><label>증분<input id="increments" type="number" min="1" value="10"></label><label>모드 수<input id="modes" type="number" min="1" value="5"></label><label>초기결함<input id="imperfection" type="number" step="any" value="0"></label></div>
+    </section>
+    <section>
+      <h2>재료 · 단면 <small>mm · N · MPa</small></h2>
+      <div class="row three"><label>E<input id="matE" type="number" step="any"></label><label>ν<input id="matNu" type="number" step="any"></label><label>항복<input id="matY" type="number" step="any" placeholder="없음"></label></div>
+      <div class="row three"><label>쉘 두께<input id="secT" type="number" step="any"></label><label>보 b<input id="secB" type="number" step="any"></label><label>보 h<input id="secH" type="number" step="any"></label></div>
+      <div class="row two"><label>힌지 κ (N·mm/rad/mm)<input id="hingeK" type="number" step="any" placeholder="자동"></label><label>자동 비율 κ=r·D/L<input id="hingeR" type="number" step="any"></label></div>
+    </section>
+    <section>
+      <h2>구속 <small id="bcCount"></small></h2>
+      <div id="bcList" class="list"></div>
+      <h2>하중 <small id="ldCount"></small></h2>
+      <div id="ldList" class="list"></div>
+      <div id="warnings"></div>
+    </section>
+    <section class="run">
+      <button id="solve" class="primary">해석 실행</button>
+      <div class="row two"><a id="expInp" class="btn ghost" href="/api/export/inp">.inp 내보내기</a><a id="expSpec" class="btn ghost" href="/api/export/spec">스펙 JSON</a></div>
+      <div id="solveMsg" class="info"></div>
+    </section>
+  </aside>
+  <main>
+    <div id="viewer">
+      <canvas id="gl"></canvas>
+      <canvas id="gizmo" width="96" height="96"></canvas>
+      <div id="hud"></div>
+      <div id="legend" hidden><div id="legendTitle"></div><div id="legendBar"></div><div id="legendTicks"></div></div>
+      <div id="viewbar">
+        <button id="fit" title="화면 맞춤">맞춤</button>
+        <label class="check"><input type="checkbox" id="showSymbols" checked>구속·하중</label>
+        <label class="check"><input type="checkbox" id="showEdges" checked>요소 경계</label>
+        <label class="check"><input type="checkbox" id="showResult" checked>결과</label>
+      </div>
+      <div id="resultbar" hidden>
+        <button id="play">▶</button>
+        <input id="frame" type="range" min="0" max="0" value="0">
+        <span id="frameLabel"></span>
+        <select id="field"></select>
+        <label>변형 배율<input id="scale" type="number" step="any" value="1"></label>
+        <button id="autoScale" class="ghost">자동</button>
+      </div>
+    </div>
+    <div id="bottom">
+      <div id="summary"></div>
+      <div id="plots"></div>
+    </div>
+  </main>
+  <aside id="right">
+    <section class="llm">
+      <h2>LLM <small id="llmStatus"></small></h2>
+      <div class="row two"><label>방식<select id="llmMode"><option value="auto">자동 (LLM, 실패 시 규칙)</option><option value="llm">LLM만</option><option value="rule">규칙 기반만</option></select></label><label>모델<input id="llmModel" type="text"></label></div>
+      <div class="row"><label>엔드포인트 (OpenAI 호환)<input id="llmUrl" type="text"></label></div>
+      <div class="row two"><label>API 키 (선택)<input id="llmKey" type="password" placeholder="로컬은 비워 둠"></label><button id="llmSave" class="ghost">적용 · 확인</button></div>
+    </section>
+    <section class="chat">
+      <h2>조건 · 결과 지시</h2>
+      <div id="chips"></div>
+      <div id="chatLog"></div>
+      <form id="chatForm"><textarea id="chatInput" rows="3" placeholder="예: z 최소 면을 고정하고, 상단에 z 방향으로 -500 N 줘"></textarea><button class="primary" type="submit">보내기</button></form>
+    </section>
+  </aside>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

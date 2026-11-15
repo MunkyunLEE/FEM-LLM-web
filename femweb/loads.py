@@ -1,5 +1,5 @@
 import numpy as np
-from .select import resolve
+from .select import describe, resolve
 
 
 def _faces(model):
@@ -117,20 +117,20 @@ def preview(model, spec):
     for bc in spec["bcs"]:
         try:
             ids = resolve(model, bc["select"])
-            out["bcs"].append({"id": bc["id"], "nodes": ids.tolist(), "dofs": bc["dofs"], "value": bc.get("value", 0.0)})
+            out["bcs"].append({"id": bc["id"], "nodes": ids.tolist(), "dofs": bc["dofs"], "value": bc.get("value", 0.0), "desc": describe(bc["select"])})
         except Exception as e:
             out["errors"].append(f"{bc['id']}: {e}")
     for ld in spec["loads"]:
         try:
             if ld["type"] == "gravity":
-                out["loads"].append({"id": ld["id"], "type": "gravity", "nodes": [], "vector": ld["vector"]})
+                out["loads"].append({"id": ld["id"], "type": "gravity", "nodes": [], "vectors": [], "total": ld["vector"], "desc": "전체"})
                 continue
             one = dict(spec)
             one["loads"] = [ld]
             F, M, a = lumped(model, one)
             V = M if ld["type"] == "moment" else F
             ids = np.where(np.abs(V).sum(axis=1) > 0)[0]
-            out["loads"].append({"id": ld["id"], "type": ld["type"], "nodes": ids.tolist(), "vectors": V[ids].round(8).tolist(), "total": V.sum(axis=0).round(8).tolist()})
+            out["loads"].append({"id": ld["id"], "type": ld["type"], "nodes": ids.tolist(), "vectors": V[ids].round(8).tolist(), "total": (V.sum(axis=0).round(8) + 0.0).tolist(), "desc": describe(ld.get("select"))})
         except Exception as e:
             out["errors"].append(f"{ld['id']}: {e}")
     return out
