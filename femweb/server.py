@@ -11,7 +11,8 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import llm, plots
+from . import llm, plots, rules
+from .hinges import auto_key, with_auto
 from .io_obj import parse_obj, refine
 from .io_stl import check_stl, stl_to_solid
 from .loads import preview
@@ -24,7 +25,7 @@ EXAMPLES = os.path.join(ROOT, "examples")
 
 app = FastAPI(title="FEM-LLM-web")
 lock = threading.Lock()
-S = {"base": None, "spec": None, "result": None, "stale": False, "chat": [], "llm": dict(llm.DEFAULTS), "cache": {}, "solve_time": None}
+S = {"base": None, "spec": None, "result": None, "stale": False, "chat": [], "llm": dict(llm.DEFAULTS), "cache": {}, "solve_time": None, "undo": [], "eff": (None, None)}
 
 
 def fail(msg, code=400):
@@ -36,8 +37,16 @@ def need_model():
         fail("먼저 지오메트리를 불러오세요")
 
 
+def eff_base():
+    key = auto_key(S["spec"])
+    if S["eff"][0] != key:
+        S["eff"] = (key, with_auto(S["base"], S["spec"]))
+        S["cache"] = {}
+    return S["eff"][1]
+
+
 def active():
-    base, spec = S["base"], S["spec"]
+    base, spec = eff_base(), S["spec"]
     if base.kind != "obj" or spec["solver"] == "barhinge":
         return base
     k = int(spec["divisions"])
@@ -61,7 +70,9 @@ def state(view=True):
         "base_counts": S["base"].summary()["counts"],
         "spec": S["spec"],
         "preview": preview(m, S["spec"]),
-        "warnings": warnings_for(S["spec"], S["base"]),
+        "warnings": warnings_for(S["spec"], eff_base()),
+        "hinge_info": hinge_info(),
+        "can_undo": bool(S["undo"]),
         "result": S["result"].meta() if S["result"] else None,
         "stale": S["stale"],
         "solve_time": S["solve_time"],
@@ -70,6 +81,17 @@ def state(view=True):
     }
     if view:
         out["view"] = m.to_view()
+    return out
+
+
+def hinge_info():
+    from .hinges import auto_cfg, is_pin
+
+    b = eff_base()
+    out = {"auto": auto_cfg(S["spec"]), "groups": []}
+    for name, es in b.hinges.items():
+        L = float(sum(((b.nodes[a] - b.nodes[c]) ** 2).sum() ** 0.5 for a, c in es))
+        out["groups"].append({"name": name, "edges": len(es), "length": round(L, 4), "pin": is_pin(S["spec"], name)})
     return out
 
 
@@ -85,6 +107,8 @@ def llm_public():
 def set_model(base, spec=None):
     S["base"] = base
     S["spec"] = spec or default_spec(base)
+    S["undo"] = []
+    S["eff"] = (None, None)
     S["result"] = None
     S["stale"] = False
     S["cache"] = {}
@@ -127,7 +151,7 @@ def load_example(name: str, preset: int = 1):
             data = open(os.path.join(EXAMPLES, ex["file"]), "rb").read()
             base = load_file(ex["file"], data, ex.get("size"))
             ops = ex["ops"] if preset else [o for o in ex["ops"] if o["op"].startswith("set_")]
-            spec, _ = apply_ops(default_spec(base), ops, base)
+            spec, _ = apply_ops(default_spec(base), ops, None)
             set_model(base, spec)
             return state()
         except HTTPException:
@@ -153,21 +177,27 @@ class Ops(BaseModel):
     ops: list
 
 
+GEO_OPS = ("set_solver", "set_divisions", "auto_hinge")
+
+
 def _apply(ops):
-    before = (S["spec"]["solver"], S["spec"]["divisions"])
-    m = active()
-    geo = [o for o in ops if isinstance(o, dict) and o.get("op") in ("set_solver", "set_divisions")]
+    saved = S["spec"]
+    before = (S["spec"]["solver"], S["spec"]["divisions"], auto_key(S["spec"]))
+    geo = [o for o in ops if isinstance(o, dict) and o.get("op") in GEO_OPS]
     rest = [o for o in ops if o not in geo]
     spec, log = apply_ops(S["spec"], geo, None)
     S["spec"] = spec
-    if (spec["solver"], spec["divisions"]) != before:
-        S["result"] = None
-        m = active()
     try:
+        m = active()
         spec, log2 = apply_ops(S["spec"], rest, m)
     except Exception:
+        S["spec"] = saved
         raise
+    if (spec["solver"], spec["divisions"], auto_key(spec)) != before:
+        S["result"] = None
     S["spec"] = spec
+    S["undo"].append(saved)
+    del S["undo"][:-30]
     if any(o.get("op") != "add_plot" and not (o.get("op") == "remove" and str(o.get("id", "")).startswith("pl")) for o in ops if isinstance(o, dict)):
         S["stale"] = S["result"] is not None
     return log + log2
@@ -190,6 +220,22 @@ class Chat(BaseModel):
     text: str
 
 
+def _try(ops, m):
+    apply_ops(S["spec"], [o for o in ops if isinstance(o, dict) and o.get("op") in GEO_OPS], None)
+    probe = m if not any(isinstance(o, dict) and o.get("op") in GEO_OPS for o in ops) else None
+    apply_ops(S["spec"], ops, probe)
+
+
+def _ask_llm(cfg, text, m):
+    ctx = llm.context(m, S["spec"], S["result"].meta() if S["result"] else None)
+    ops, reply = llm.ask_llm(cfg, text, ctx, S["chat"])
+    try:
+        _try(ops, m)
+    except Exception as e:
+        ops, reply = llm.ask_llm(cfg, text, ctx, S["chat"], error=str(e))
+    return ops, reply
+
+
 @app.post("/api/chat")
 def chat(body: Chat):
     with lock:
@@ -199,42 +245,78 @@ def chat(body: Chat):
         text = body.text.strip()
         if not text:
             fail("내용이 비어 있습니다")
+        mode = cfg["mode"]
         engine = "rule"
         note = ""
-        ops, reply = [], ""
-        used_llm = False
-        if cfg["mode"] != "rule":
-            ctx = llm.context(m, S["spec"], S["result"].meta() if S["result"] else None)
+        action = None
+        rops, rreply, info = rules.parse(text, m, S["spec"])
+        rule_ok = info["complete"]
+        if rule_ok and rops:
             try:
-                ops, reply = llm.ask_llm(cfg, text, ctx, S["chat"])
-                used_llm = True
+                _try(rops, m)
+            except Exception as e:
+                rule_ok = False
+                rreply += f" (적용 검사 실패: {e})"
+        direct = rule_ok or (info["ask"] and not info["unknown"]) or info["answered"]
+        use_llm = mode in ("auto", "llm") or (mode == "rule_first" and not direct)
+        ops, reply = rops, rreply
+        if use_llm:
+            try:
+                ops, reply = _ask_llm(cfg, text, m)
                 engine = "llm"
-                try:
-                    apply_ops(S["spec"], ops, m if not any(o.get("op") in ("set_solver", "set_divisions") for o in ops if isinstance(o, dict)) else None)
-                except Exception as e:
-                    ops, reply = llm.ask_llm(cfg, text, ctx, S["chat"], error=str(e))
             except llm.Cancelled:
                 fail("LLM 요청을 중단했습니다", 409)
             except Exception as e:
-                if cfg["mode"] == "llm":
+                if mode == "llm":
                     fail(f"LLM 호출 실패: {e}")
-                note = f"LLM에 연결하지 못해 규칙 기반 해석기를 사용했습니다 ({str(e)[:120]})"
-                used_llm = False
-        if not used_llm:
-            ops, reply = llm.rule_parse(text, m, S["spec"])
-            engine = "rule"
+                note = f"LLM에 연결하지 못해 규칙 기반 해석 결과를 사용했습니다 ({str(e)[:120]})"
+                ops, reply = rops, rreply
+        elif mode == "rule_first":
+            note = "규칙으로 바로 처리했습니다" if rule_ok else ""
         error = None
         log = []
-        if ops:
+        if engine == "rule" and info["undo"]:
+            if S["undo"]:
+                prev = S["undo"].pop()
+                changed = (prev["solver"], prev["divisions"], auto_key(prev)) != (S["spec"]["solver"], S["spec"]["divisions"], auto_key(S["spec"]))
+                S["spec"] = prev
+                if changed:
+                    S["result"] = None
+                else:
+                    S["stale"] = S["result"] is not None
+                reply = "직전 상태로 되돌렸습니다."
+            else:
+                reply = "되돌릴 내용이 없습니다."
+            ops = []
+        elif ops:
             try:
                 log = _apply(ops)
             except Exception as e:
                 error = str(e)
+        if engine == "rule" and info["run"] and not error and not info["ask"] and not info["unknown"]:
+            action = "solve"
         S["chat"].append({"role": "user", "content": text})
         S["chat"].append({"role": "assistant", "content": json.dumps({"ops": ops, "reply": reply}, ensure_ascii=False)})
+        del S["chat"][:-12]
         out = state(view=True)
-        out["chat"] = {"reply": reply, "ops": ops, "engine": engine, "model": cfg["model"] if engine == "llm" else None, "provider": llm.provider(cfg["url"]) if engine == "llm" else None, "note": note, "error": error, "log": log}
+        out["chat"] = {"reply": reply, "ops": ops, "engine": engine, "model": cfg["model"] if engine == "llm" else None, "provider": llm.provider(cfg["url"]) if engine == "llm" else None, "note": note, "error": error, "log": log, "action": action}
         return out
+
+
+@app.post("/api/undo")
+def undo():
+    with lock:
+        need_model()
+        if not S["undo"]:
+            fail("되돌릴 내용이 없습니다")
+        prev = S["undo"].pop()
+        changed = (prev["solver"], prev["divisions"], auto_key(prev)) != (S["spec"]["solver"], S["spec"]["divisions"], auto_key(S["spec"]))
+        S["spec"] = prev
+        if changed:
+            S["result"] = None
+        else:
+            S["stale"] = S["result"] is not None
+        return state(view=True)
 
 
 def _solve_with(m, base, spec):
@@ -283,7 +365,7 @@ def _kill(proc):
 def run_solver():
     ctx = multiprocessing.get_context("spawn")
     parent, child = ctx.Pipe(duplex=False)
-    proc = ctx.Process(target=_worker, args=(child, active(), S["base"], S["spec"]), daemon=True)
+    proc = ctx.Process(target=_worker, args=(child, active(), eff_base(), S["spec"]), daemon=True)
     JOB["cancelled"] = False
     proc.start()
     JOB["proc"] = proc
@@ -394,8 +476,8 @@ def set_llm(body: LLMCfg):
             v = getattr(body, k)
             if v is not None:
                 S["llm"][k] = v.strip()
-        if S["llm"]["mode"] not in ("auto", "llm", "rule"):
-            S["llm"]["mode"] = "auto"
+        if S["llm"]["mode"] not in ("rule_first", "auto", "llm", "rule"):
+            S["llm"]["mode"] = "rule_first"
         return {"llm": llm_public(), "status": llm.llm_status(S["llm"])}
 
 
@@ -414,7 +496,7 @@ def export_inp():
     with lock:
         need_model()
         try:
-            text, notes, _ = calculix.build_inp(active(), S["base"], S["spec"], step={"type": "static" if S["spec"]["step"]["type"] == "arclength" else S["spec"]["step"]["type"]})
+            text, notes, _ = calculix.build_inp(active(), eff_base(), S["spec"], step={"type": "static" if S["spec"]["step"]["type"] == "arclength" else S["spec"]["step"]["type"]})
         except Exception as e:
             fail(e)
         return PlainTextResponse(text, headers={"Content-Disposition": "attachment; filename=job.inp"})

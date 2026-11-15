@@ -28,6 +28,8 @@ def find_ccx():
 def hinge_kappa(spec, name, model, group_hint=None):
     h = dict(spec["hinges"]["*"])
     h.update(spec["hinges"].get(name, {}))
+    if h.get("pin"):
+        return 0.0
     if h.get("kappa") is not None:
         return float(h["kappa"])
     g = group_hint or (model.shell_group[0] if model.shell_group else "*")
@@ -58,9 +60,16 @@ def _beam_dir(t):
 
 
 def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
+    from ..hinges import split_pins
+
     st = dict(spec["step"])
     if step:
         st.update(step)
+    n_orig = len(model.nodes)
+    model, ties, tie_pairs, pin_names = split_pins(model, spec)
+    if perturb is not None and len(perturb) < len(model.nodes):
+        extra = np.array([perturb[a] for a, _ in ties]).reshape(-1, 3)
+        perturb = np.vstack([perturb, extra])
     nodes = [p for p in (model.nodes if perturb is None else model.nodes + perturb)]
     mids = {}
 
@@ -167,7 +176,25 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
             L += [f"*SHELL SECTION, ELSET={names[key]}, MATERIAL={mname}", f"{t:.9g}"]
         else:
             L.append(f"*SOLID SECTION, ELSET={names[key]}, MATERIAL={mname}")
+    if pin_names:
+        notes.append(f"핀 조인트 {', '.join(pin_names)}: 접힘선 절점을 분리하고 병진 자유도만 묶었습니다 (회전 자유, 절점 쌍 {len(ties)}개)")
     table = bc_table(model, spec)
+    slaves = {b for _, b in ties}
+    eq = [(b, a) for a, b in ties]
+    for k0, k1 in tie_pairs:
+        if k0 in mids and k1 in mids and mids[k0] != mids[k1]:
+            eq.append((mids[k1], mids[k0]))
+            slaves.add(mids[k1])
+    master_of = {b: a for b, a in eq}
+    for (n, d) in list(table):
+        if n in slaves and d <= 3:
+            v = table.pop((n, d))
+            table.setdefault((master_of[n], d), v)
+    if eq:
+        L.append("*EQUATION")
+        for b, a in eq:
+            for d in (1, 2, 3):
+                L += ["2", f"{b + 1}, {d}, 1., {a + 1}, {d}, -1."]
     solid_only = len(model.solids) > 0 and not model.beams and not model.shells
     zero = [(n, d) for (n, d), v in table.items() if v == 0.0 and not (solid_only and d > 3)]
     moving = [(n, d, v) for (n, d), v in table.items() if v != 0.0 and not (solid_only and d > 3)]
@@ -183,6 +210,8 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
             for d in range(1, 7):
                 if (a, d) in table and (b, d) in table:
                     va, vb = table[(a, d)], table[(b, d)]
+                    if mnode in slaves and d <= 3:
+                        continue
                     if va == 0.0 and vb == 0.0:
                         zero.append((mnode, d))
                     else:
@@ -236,6 +265,9 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
             else:
                 for i in range(3):
                     add(mid(f[i], f[(i + 1) % 3]), v / 3)
+        for (n, d) in list(F):
+            if n in slaves and d <= 3:
+                F[(master_of[n], d)] = F.get((master_of[n], d), 0.0) + F.pop((n, d))
         if F:
             L.append("*CLOAD")
             L += [f"{n + 1}, {d}, {v:.9g}" for (n, d), v in F.items()]

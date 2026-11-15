@@ -30,6 +30,8 @@
       <div class="row three"><label>E<input id="matE" type="number" step="any"></label><label>ν<input id="matNu" type="number" step="any"></label><label>항복<input id="matY" type="number" step="any" placeholder="없음"></label></div>
       <div class="row three"><label>쉘 두께<input id="secT" type="number" step="any"></label><label>보 b<input id="secB" type="number" step="any"></label><label>보 h<input id="secH" type="number" step="any"></label></div>
       <div class="row two"><label>힌지 κ (N·mm/rad/mm)<input id="hingeK" type="number" step="any" placeholder="자동"></label><label>자동 비율 κ=r·D/L<input id="hingeR" type="number" step="any"></label></div>
+      <div class="row two"><label>쉘 공유 엣지 힌지<select id="hingeAuto"><option value="off">끔 (OBJ의 hinge_ 선만)</option><option value="auto">자동 (그룹 경계 + 꺾인 엣지)</option><option value="groups">그룹 경계</option><option value="crease">꺾인 엣지</option><option value="all">모든 내부 엣지</option></select></label><label class="check"><input type="checkbox" id="hingePin">핀 조인트 (회전 자유)</label></div>
+      <div id="hingeInfo" class="info"></div>
     </section>
     <section>
       <h2>구속 <small id="bcCount"></small></h2>
@@ -37,6 +39,7 @@
       <h2>하중 <small id="ldCount"></small></h2>
       <div id="ldList" class="list"></div>
       <div id="warnings"></div>
+      <div class="row"><button id="undo" class="ghost" type="button" disabled>되돌리기</button></div>
     </section>
     <section class="run">
       <button id="solve" class="primary">해석 실행</button>
@@ -76,7 +79,7 @@
     <div class="topbar"><a id="theoryBtn" class="btn ghost" href="/theory.html" target="_blank" rel="noopener">Theory · 원리와 설계</a></div>
     <section class="llm">
       <h2>LLM <small id="llmStatus"></small></h2>
-      <div class="row two"><label>방식<select id="llmMode"><option value="auto">자동 (LLM, 실패 시 규칙)</option><option value="llm">LLM만</option><option value="rule">규칙 기반만</option></select></label><label>모델<input id="llmModel" type="text"></label></div>
+      <div class="row two"><label>방식<select id="llmMode"><option value="rule_first">규칙 우선 (모르면 LLM)</option><option value="auto">LLM 우선 (실패 시 규칙)</option><option value="llm">LLM만</option><option value="rule">규칙 기반만</option></select></label><label>모델<input id="llmModel" type="text"></label></div>
       <div class="row"><label>엔드포인트 (OpenAI 호환)<input id="llmUrl" type="text"></label></div>
       <div class="row two"><label>API 키 (선택)<input id="llmKey" type="password" placeholder="로컬은 비워 둠"></label><button id="llmSave" class="ghost">적용 · 확인</button></div>
       <div class="row"><button id="llmTest" class="ghost" type="button">실제 응답 테스트</button></div>

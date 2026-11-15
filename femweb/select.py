@@ -40,6 +40,22 @@ def resolve(model, sel):
         tol = model.diag() * 1e-6
         ok = np.all((model.nodes >= lo - tol) & (model.nodes <= hi + tol), axis=1)
         parts.append(set(np.where(ok)[0].tolist()))
+    if sel.get("boundary"):
+        ids = set()
+        for e, fl in model.shell_edges().items():
+            if len(fl) == 1:
+                ids.update(e)
+        if not ids:
+            raise ValueError("테두리(자유 엣지)가 없는 모델입니다")
+        parts.append(ids)
+    if sel.get("corners"):
+        lo, hi = model.bbox()
+        ids = set()
+        for i in range(8):
+            c = np.array([hi[k] if (i >> k) & 1 else lo[k] for k in range(3)])
+            d = np.linalg.norm(model.nodes - c, axis=1)
+            ids.add(int(np.argmin(d)))
+        parts.append(ids)
     if "nearest" in sel:
         d = np.linalg.norm(model.nodes - np.array(sel["nearest"], dtype=float), axis=1)
         parts.append({int(np.argmin(d))})
@@ -66,6 +82,10 @@ def describe(sel):
         out.append(f"{p.get('axis', 'z')}={p.get('at', 'min')}")
     if "box" in sel:
         out.append("박스 영역")
+    if sel.get("boundary"):
+        out.append("테두리")
+    if sel.get("corners"):
+        out.append("모서리 점")
     if "nearest" in sel:
         out.append("절점 (" + ", ".join(f"{float(v):g}" for v in sel["nearest"]) + ")")
     if "nodes" in sel:

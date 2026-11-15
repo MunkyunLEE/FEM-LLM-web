@@ -8,6 +8,7 @@ sys.path.insert(0, ROOT)
 from femweb.io_obj import parse_obj, refine
 from femweb.io_stl import stl_to_solid
 from femweb.spec import apply_ops, default_spec
+from femweb.hinges import with_auto
 
 
 def load_example(name):
@@ -18,8 +19,8 @@ def load_example(name):
         base = stl_to_solid(open(path, "rb").read(), p["file"], size=p.get("size"))
     else:
         base = parse_obj(open(path).read(), p["file"])
-    spec, _ = apply_ops(default_spec(base), p["ops"], base)
-    return base, spec
+    spec, _ = apply_ops(default_spec(base), p["ops"], None)
+    return with_auto(base, spec), spec
 
 
 def active(base, spec):

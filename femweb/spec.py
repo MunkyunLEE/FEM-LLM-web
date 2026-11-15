@@ -23,6 +23,7 @@ def default_spec(model=None):
         "materials": {"default": {"E": 210000.0, "nu": 0.3, "rho": 7.85e-9, "yield": None, "hardening": 0.0}},
         "sections": {"*": {"material": "default", "thickness": 1.0, "beam": {"shape": "rect", "b": 10.0, "h": 10.0}}},
         "hinges": {"*": {"kappa": None, "ratio": 0.1}},
+        "hinge_auto": {"mode": "off", "angle": 5.0},
         "bcs": [],
         "loads": [],
         "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0},
@@ -174,7 +175,25 @@ def apply_ops(spec, ops, model=None):
                 h["kappa"] = None if op["kappa"] is None else _num(op["kappa"], "kappa")
             if "ratio" in op:
                 h["ratio"] = _num(op["ratio"], "ratio")
+            if "kappa" in op and op["kappa"] is not None:
+                if h["kappa"] < 0:
+                    raise ValueError("힌지 강성은 0 이상이어야 합니다")
+                h["pin"] = h["kappa"] == 0.0
+            if "pin" in op:
+                h["pin"] = bool(op["pin"])
+                if h["pin"]:
+                    h["kappa"] = None
             log.append(f"힌지 {g}")
+        elif k == "auto_hinge":
+            mode = str(op.get("mode", "auto")).lower()
+            if mode not in ("off", "auto", "groups", "crease", "all"):
+                raise ValueError("auto_hinge mode 는 off, auto, groups, crease, all 중 하나여야 합니다")
+            cur = dict(spec.get("hinge_auto") or {"mode": "off", "angle": 5.0})
+            cur["mode"] = mode
+            if op.get("angle") is not None:
+                cur["angle"] = max(0.0, _num(op["angle"], "angle"))
+            spec["hinge_auto"] = cur
+            log.append(f"자동 힌지 {mode}")
         elif k == "set_step":
             st = spec["step"]
             if "type" in op:
@@ -218,6 +237,10 @@ def warnings_for(spec, model):
         out.append("보·쉘(OBJ) 모델은 TensorMesh(솔리드) 솔버로 풀 수 없습니다")
     if spec["solver"] == "barhinge" and not model.shells:
         out.append("바-힌지 솔버에는 면(f) 패널이 필요합니다")
+    if spec["solver"] == "barhinge" and any(d > 3 for b in spec["bcs"] for d in b["dofs"]):
+        out.append("바-힌지 모델에는 회전 자유도가 없어 회전 구속은 적용되지 않습니다 (고정은 병진 구속으로만 반영)")
+    if spec["step"]["type"] == "modal" and not (spec["materials"]["default"].get("rho") or 0) > 0:
+        out.append("모달 해석에는 밀도가 필요합니다")
     if not spec["bcs"]:
         out.append("구속이 없습니다 (강체 운동 가능)")
     else:

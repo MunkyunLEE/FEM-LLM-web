@@ -364,6 +364,78 @@
    }
   ]
  },
+ "panel_chain": {
+  "title": "6. 패널 3장 이음 (공유 엣지 핀 조인트)",
+  "file": "panel_chain.obj",
+  "note": "100x60 패널 3장(t=2)이 엣지를 맞대고 있음. 양 끝 고정, 가운데 패널 중앙선에 -100 N. 핀 조인트면 이음선 처짐 이론값 PL^3/(6EI) = 1.98 mm (보 이론)",
+  "prompts": [
+   "쉘 사이 공유 엣지를 핀 조인트로 처리해줘",
+   "양단 고정",
+   "x=150 위치에 아래로 100 N",
+   "해석 실행"
+  ],
+  "ops": [
+   {
+    "op": "set_solver",
+    "solver": "calculix"
+   },
+   {
+    "op": "set_section",
+    "group": "*",
+    "thickness": 2.0
+   },
+   {
+    "op": "set_divisions",
+    "divisions": 2
+   },
+   {
+    "op": "auto_hinge",
+    "mode": "auto"
+   },
+   {
+    "op": "set_hinge",
+    "group": "*",
+    "pin": true
+   },
+   {
+    "op": "add_bc",
+    "type": "fixed",
+    "name": "양단 고정",
+    "select": {
+     "or": [
+      {
+       "plane": {
+        "axis": "x",
+        "at": "min"
+       }
+      },
+      {
+       "plane": {
+        "axis": "x",
+        "at": "max"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "op": "add_load",
+    "type": "force",
+    "name": "중앙선 하중",
+    "vector": [
+     0,
+     0,
+     -100
+    ],
+    "select": {
+     "plane": {
+      "axis": "x",
+      "at": 150.0
+     }
+    }
+   }
+  ]
+ },
  "cantilever_solid": {
   "title": "5a. 캔틸레버 빔 (솔리드 요소)",
   "file": "cantilever_solid.stl",

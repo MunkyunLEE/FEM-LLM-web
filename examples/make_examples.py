@@ -75,6 +75,24 @@ def miura(a=50.0, b=50.0, gamma=60.0, theta=60.0, nx=4, ny=4):
     write("miura.obj", "\n".join(out) + "\n")
 
 
+def panel_chain(L=100.0, W=60.0, n=4, m=3):
+    out = ["# three separate shell panels with coincident edges (welded on import)"]
+    faces = []
+    nv = 0
+    for k, name in enumerate(("panel_A", "panel_B", "panel_C")):
+        x0 = k * L
+        for j in range(m + 1):
+            for i in range(n + 1):
+                out.append(f"v {x0 + L * i / n:.6f} {W * j / m:.6f} 0")
+        faces.append(f"o {name}")
+        for j in range(m):
+            for i in range(n):
+                a = nv + j * (n + 1) + i + 1
+                faces.append(f"f {a} {a + 1} {a + n + 2} {a + n + 1}")
+        nv += (n + 1) * (m + 1)
+    write("panel_chain.obj", "\n".join(out + faces) + "\n")
+
+
 def stl(name, tris):
     out = [f"solid {name}"]
     for p, q, r in tris:
@@ -183,6 +201,21 @@ PRESETS = {
             {"op": "add_plot", "title": "에너지 이력", "x": {"quantity": "time"}, "series": [{"quantity": "energy.total"}, {"quantity": "energy.fold"}, {"quantity": "energy.bar"}, {"quantity": "energy.bend"}]},
         ],
     },
+    "panel_chain": {
+        "title": "6. 패널 3장 이음 (공유 엣지 핀 조인트)",
+        "file": "panel_chain.obj",
+        "note": "100x60 패널 3장(t=2)이 엣지를 맞대고 있음. 양 끝 고정, 가운데 패널 중앙선에 -100 N. 핀 조인트면 이음선 처짐 이론값 PL^3/(6EI) = 1.98 mm (보 이론)",
+        "prompts": ["쉘 사이 공유 엣지를 핀 조인트로 처리해줘", "양단 고정", "x=150 위치에 아래로 100 N", "해석 실행"],
+        "ops": [
+            {"op": "set_solver", "solver": "calculix"},
+            {"op": "set_section", "group": "*", "thickness": 2.0},
+            {"op": "set_divisions", "divisions": 2},
+            {"op": "auto_hinge", "mode": "auto"},
+            {"op": "set_hinge", "group": "*", "pin": True},
+            {"op": "add_bc", "type": "fixed", "name": "양단 고정", "select": {"or": [{"plane": {"axis": "x", "at": "min"}}, {"plane": {"axis": "x", "at": "max"}}]}},
+            {"op": "add_load", "type": "force", "name": "중앙선 하중", "vector": [0, 0, -100], "select": {"plane": {"axis": "x", "at": 150.0}}},
+        ],
+    },
     "cantilever_solid": {
         "title": "5a. 캔틸레버 빔 (솔리드 요소)",
         "file": "cantilever_solid.stl",
@@ -213,6 +246,7 @@ if __name__ == "__main__":
     cantilever_beam()
     shell_panel()
     cylinder_shell()
+    panel_chain()
     miura()
     cantilever_solid()
     cylinder_solid()

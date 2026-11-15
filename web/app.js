@@ -535,6 +535,14 @@ function renderControls() {
   $('secH').value = sec.beam.h ?? '';
   $('hingeK').value = s.hinges['*'].kappa ?? '';
   $('hingeR').value = s.hinges['*'].ratio;
+  $('hingePin').checked = !!s.hinges['*'].pin;
+  $('hingeK').disabled = !!s.hinges['*'].pin;
+  $('hingeR').disabled = !!s.hinges['*'].pin;
+  const hg = st.hinge_info || { auto: { mode: 'off' }, groups: [] };
+  $('hingeAuto').value = hg.auto.mode;
+  $('hingeAuto').disabled = st.model.kind !== 'obj';
+  $('hingeInfo').textContent = hg.groups.length ? '힌지: ' + hg.groups.map((g) => `${g.name} ${g.edges}개 엣지 · ${g.length} mm${g.pin ? ' · 핀' : ''}`).join(' / ') : st.model.kind === 'obj' && st.model.counts.shells ? '지정된 힌지 없음 (쉘 이음은 강접, 바-힌지는 모든 내부 엣지가 접힘선)' : '';
+  $('undo').disabled = !st.can_undo;
 }
 
 function renderSummary() {
@@ -652,7 +660,7 @@ async function refresh(s, opt = {}) {
   st = s;
   renderControls();
   if (!st.model) return;
-  const key = `${st.model.source}|${st.model.counts.nodes}|${st.spec.solver === 'barhinge'}|${st.spec.divisions}`;
+  const key = `${st.model.source}|${st.model.counts.nodes}|${st.spec.solver === 'barhinge'}|${st.spec.divisions}|${JSON.stringify(st.hinge_info || {})}`;
   if (st.view === undefined && prev) st.view = prev.view;
   if (key !== lastGeoKey) {
     lastGeoKey = key;
@@ -714,7 +722,8 @@ async function sendChat(text) {
     wait.remove();
     const c = s.chat;
     addMsg('bot', c.reply || (c.ops.length ? '적용했습니다.' : '적용할 내용이 없습니다.'), c);
-    await refresh(s, { keepResult: true });
+    await refresh(s, { keepResult: !!s.result });
+    if (c.action === 'solve') $('solve').click();
   } catch (e) {
     clearInterval(timer);
     wait.remove();
@@ -773,6 +782,9 @@ async function llmRefresh(save) {
   if (r.llm.mode === 'rule') {
     s.textContent = '규칙 기반 사용';
     s.className = '';
+  } else if (r.llm.mode === 'rule_first') {
+    s.textContent = r.status.ok && r.status.has_model ? '규칙 우선 · LLM 대기 중' : '규칙 우선 · LLM 없음';
+    s.className = r.status.ok && r.status.has_model ? 'ok' : '';
   } else if (r.status.ok) {
     s.textContent = r.status.has_model ? '연결됨' : `연결됨 · 모델 '${r.llm.model}' 없음`;
     s.className = r.status.has_model ? 'ok' : 'bad';
@@ -800,8 +812,9 @@ function renderLlmInfo(r, test) {
   add('모델', r.llm.model, stt.ok ? (stt.has_model ? 'good' : 'badt') : '');
   add('API 키', r.llm.has_key ? '입력됨' : '없음');
   if (r.llm.mode === 'rule') add('현재 방식', 'LLM을 부르지 않고 규칙 기반만 사용 중');
+  else if (r.llm.mode === 'rule_first') add('현재 방식', '규칙이 이해한 문장은 즉시 처리, 못 알아들은 문장만 LLM으로 보냄');
   else if (stt.ok) add('서버 응답', `정상 (${stt.ms} ms) · 모델 ${stt.models.length}개 목록${stt.has_model ? '에 선택한 모델이 있음' : '에 선택한 모델이 없음'}`, stt.has_model ? 'good' : 'badt');
-  else add('서버 응답', '연결 실패: ' + (stt.error || ''), 'badt');
+  else add('서버 응답', '연결 실패: ' + (stt.error || '') + (r.llm.mode === 'rule_first' ? ' (규칙으로 처리되는 문장은 그대로 동작합니다)' : ''), 'badt');
   if (test) {
     if (test.ok) add('실제 응답', `성공 (${(test.ms / 1000).toFixed(1)}초) · 응답한 모델 ${test.model || '?'} · JSON ${test.json_ok ? '정상' : '아님'} · "${test.reply}"`, test.json_ok ? 'good' : 'badt');
     else add('실제 응답', '실패: ' + test.error, 'badt');
@@ -911,6 +924,15 @@ function bind() {
   $('secH').onchange = (e) => ops([{ op: 'set_section', group: '*', beam: { h: +e.target.value } }]);
   $('hingeK').onchange = (e) => ops([{ op: 'set_hinge', group: '*', kappa: e.target.value === '' ? null : +e.target.value }]);
   $('hingeR').onchange = (e) => ops([{ op: 'set_hinge', group: '*', ratio: +e.target.value }]);
+  $('hingeAuto').onchange = (e) => ops([{ op: 'auto_hinge', mode: e.target.value }]);
+  $('hingePin').onchange = (e) => ops([{ op: 'set_hinge', group: '*', pin: e.target.checked }]);
+  $('undo').onclick = async () => {
+    try {
+      await refresh(await api('/api/undo', { method: 'POST' }));
+    } catch (e) {
+      note(e.message, true);
+    }
+  };
   $('solve').onclick = async () => {
     if (!st || !st.model) return note('먼저 지오메트리를 불러오세요', true);
     const b = $('solve');
