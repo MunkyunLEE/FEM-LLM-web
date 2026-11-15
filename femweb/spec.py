@@ -179,6 +179,10 @@ def apply_ops(spec, ops, model=None):
                 if h["kappa"] < 0:
                     raise ValueError("힌지 강성은 0 이상이어야 합니다")
                 h["pin"] = h["kappa"] == 0.0
+            if op.get("method") is not None:
+                if op["method"] not in ("spring", "strip"):
+                    raise ValueError("hinge method 는 spring 또는 strip 이어야 합니다")
+                spec["hinge_method"] = op["method"]
             if "pin" in op:
                 h["pin"] = bool(op["pin"])
                 if h["pin"]:

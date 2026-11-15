@@ -66,7 +66,23 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
     if step:
         st.update(step)
     n_orig = len(model.nodes)
-    model, ties, tie_pairs, pin_names = split_pins(model, spec)
+    method = os.environ.get("FEMWEB_HINGE", spec.get("hinge_method", "spring"))
+    rigid = []
+    if method != "strip" and model.hinges and model.shells:
+        from ..hinges import is_pin
+
+        wm = panel_width(model)
+        for name in list(model.hinges):
+            g = model.shell_group[0]
+            sec = section_for(spec, g)
+            mat = material_for(spec, g)
+            D = mat["E"] * sec["thickness"] ** 3 / (12 * (1 - mat["nu"] ** 2))
+            if not is_pin(spec, name) and hinge_kappa(spec, name, base, g) * wm / (4 * D) > 0.5:
+                rigid.append(name)
+        if rigid:
+            model = model.copy()
+            model.hinges = {k: v for k, v in model.hinges.items() if k not in rigid}
+    model, ties, tie_pairs, pin_names, joints = split_pins(model, spec, every=method != "strip")
     if perturb is not None and len(perturb) < len(model.nodes):
         extra = np.array([perturb[a] for a, _ in ties]).reshape(-1, 3)
         perturb = np.vstack([perturb, extra])
@@ -117,6 +133,44 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
         key = ("SH", g, hinge_of.get(fi))
         elsets.setdefault(key, []).append(eid)
         etext.setdefault(typ, []).append(f"{eid}, " + ", ".join(str(i + 1) for i in ids))
+    spring_notes = {}
+    nseg = int(os.environ.get("FEMWEB_HSEG", "1"))
+    btype = os.environ.get("FEMWEB_HTYPE", "B32R")
+    for name, k0, k1, f2 in joints:
+        from ..hinges import is_pin
+
+        if is_pin(spec, name) or k0 not in mids or k1 not in mids:
+            continue
+        g = model.shell_group[f2]
+        mat = material_for(spec, g)
+        kap = hinge_kappa(spec, name, base, g)
+        s2 = model.shells[f2]
+        n2 = len(s2)
+        i = next(j for j in range(n2) if (min(s2[j], s2[(j + 1) % n2]), max(s2[j], s2[(j + 1) % n2])) == k1)
+        far = mid(s2[(i + 2) % n2], s2[(i + 3) % n2]) if n2 == 4 else s2[(i + 2) % n2]
+        m1 = mids[k0]
+        le = float(np.linalg.norm(nodes[k1[0]] - nodes[k1[1]]))
+        w = float(np.linalg.norm(nodes[far] - nodes[m1]))
+        hdir = (nodes[k1[1]] - nodes[k1[0]]) / le
+        cos2 = float(((nodes[far] - nodes[m1]) / w) @ hdir) ** 2
+        I = kap * le * w / (4.0 * mat["E"] * ((1.0 - cos2) + 0.2109 * cos2))
+        a = (12.0 * I) ** 0.25
+        chain = [m1]
+        nn = nseg * (2 if btype.startswith("B32") else 1)
+        for q in range(1, nn):
+            nodes.append(nodes[m1] + (nodes[far] - nodes[m1]) * q / nn)
+            chain.append(len(nodes) - 1)
+        chain.append(far)
+        t = (nodes[far] - nodes[m1]) / w
+        key = ("HB", g, (name, round(a, 5), _beam_dir(t)))
+        step = 2 if btype.startswith("B32") else 1
+        for q in range(0, len(chain) - 1, step):
+            eid += 1
+            elsets.setdefault(key, []).append(eid)
+            etext.setdefault(btype, []).append(f"{eid}, " + ", ".join(str(x + 1) for x in chain[q : q + step + 1]))
+        sn = spring_notes.setdefault(name, [kap, 0, []])
+        sn[1] += 1
+        sn[2].append(a)
     for t in model.solids:
         eid += 1
         a, b, c, d = (int(i) for i in t)
@@ -144,6 +198,9 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
         name = section_for(spec, g).get("material", "default")
         mats[name] = spec["materials"].get(name, spec["materials"]["default"])
     plastic = False
+    hmats = sorted({section_for(spec, key[1]).get("material", "default") for key in elsets if key[0] == "HB"})
+    for name in hmats:
+        L += [f"*MATERIAL, NAME=MH_{name}", "*ELASTIC", f"{mats[name]['E']:.9g}, 0.", "*DENSITY", "1e-20"]
     for name, m in mats.items():
         L += [f"*MATERIAL, NAME=M_{name}", "*ELASTIC", f"{m['E']:.9g}, {m['nu']:.9g}", "*DENSITY", f"{m['rho']:.9g}"]
         if m.get("yield"):
@@ -164,6 +221,9 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
             else:
                 L += [f"*BEAM SECTION, ELSET={names[key]}, MATERIAL={mname}, SECTION=RECT", f"{float(b['b']):.9g}, {float(b['h']):.9g}"]
             L.append(", ".join(f"{x:.6g}" for x in extra))
+        elif kind == "HB":
+            a = extra[1]
+            L += [f"*BEAM SECTION, ELSET={names[key]}, MATERIAL=MH_{sec.get('material', 'default')}, SECTION=RECT", f"{a:.9g}, {a:.9g}", ", ".join(f"{x:.6g}" for x in extra[2])]
         elif kind == "SH":
             t = float(sec["thickness"])
             if extra:
@@ -176,6 +236,10 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
             L += [f"*SHELL SECTION, ELSET={names[key]}, MATERIAL={mname}", f"{t:.9g}"]
         else:
             L.append(f"*SOLID SECTION, ELSET={names[key]}, MATERIAL={mname}")
+    for name, (kap, cnt, aa) in spring_notes.items():
+        notes.append(f"힌지 {name}: kappa={kap:.5g} N·mm/rad/mm, 접힘선 절점 분리 + 회전 스프링 보 {cnt}개 (단면 {min(aa):.3g}~{max(aa):.3g} mm)")
+    if rigid:
+        notes.append(f"힌지 {', '.join(rigid)}: 강성이 요소 폭 기준 패널 휨강성보다 커서 강접으로 처리했습니다 (분할수를 늘리면 스프링으로 반영됩니다)")
     if pin_names:
         notes.append(f"핀 조인트 {', '.join(pin_names)}: 접힘선 절점을 분리하고 병진 자유도만 묶었습니다 (회전 자유, 절점 쌍 {len(ties)}개)")
     table = bc_table(model, spec)
@@ -282,7 +346,7 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
     else:
         L += [f"*NODE FILE{o2}", "U, RF", "*EL FILE", "S", "*EL PRINT, ELSET=EALL, TOTALS=ONLY", "ELSE"]
     L.append("*END STEP")
-    meta = {"nodes": np.array(nodes, dtype=float), "bc": sorted({n for n, _, _ in moving}) if moving else sorted({n for n, _ in zero})}
+    meta = {"nodes": np.array(nodes, dtype=float), "bc": sorted({n for n, _, _ in moving}) if moving else sorted({n for n, _ in zero}), "hinge_elems": [e for k, v in elsets.items() if k[0] == "HB" for e in v]}
     return "\n".join(L) + "\n", notes, meta
 
 
@@ -332,6 +396,7 @@ def parse_frd(text):
             while i < n and not lines[i].startswith(" -3"):
                 s = lines[i]
                 if s.startswith(" -1"):
+                    enum = int(s[3:13])
                     typ = int(s[13:18])
                     ids = []
                     i += 1
@@ -339,7 +404,7 @@ def parse_frd(text):
                         t = lines[i][3:]
                         ids += [int(t[k : k + 10]) for k in range(0, len(t.rstrip()), 10)]
                         i += 1
-                    elems.append((typ, ids))
+                    elems.append((typ, ids, enum))
                 else:
                     i += 1
         elif l.startswith("  100C"):
@@ -382,7 +447,7 @@ TET = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]]
 def surface(elems):
     faces = {}
     lines = []
-    for typ, ids in elems:
+    for typ, ids in ((e[0], e[1]) for e in elems):
         if typ in (1, 4):
             fl = [[ids[k] for k in f] for f in HEX]
         elif typ in (2, 5):
@@ -481,6 +546,8 @@ def solve(model, base, spec, progress=None):
     notes += n2
     frd, dat, out = run_ccx(inp)
     nodes, elems, blocks = parse_frd(frd)
+    hide = set(meta.get("hinge_elems", []))
+    elems = [e for e in elems if e[2] not in hide]
     tris, lines = surface(elems)
     fedges = surface.fedges
     used = sorted({i for t in tris for i in t} | {i for l in lines for i in l})
@@ -510,7 +577,9 @@ def solve(model, base, spec, progress=None):
         from scipy.spatial import cKDTree
 
         near = cKDTree(meta["nodes"]).query(np.array([nodes[i] for i in forc[0]["ids"]]))[1]
-        sup = np.isin(near, np.array(meta["bc"]))
+        bcpos = meta["nodes"][np.array(meta["bc"])]
+        span = float(np.linalg.norm(meta["nodes"].max(axis=0) - meta["nodes"].min(axis=0))) or 1.0
+        sup = cKDTree(bcpos).query(meta["nodes"][near])[0] <= 1e-9 * span
     factors = _factors(dat) if kind == "buckle" else []
     freqs = _freqs(dat) if kind == "modal" else []
     energy = _totals(dat)

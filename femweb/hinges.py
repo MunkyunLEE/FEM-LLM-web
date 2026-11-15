@@ -76,16 +76,16 @@ def is_pin(spec, name):
     return h.get("kappa") is not None and float(h["kappa"]) == 0.0
 
 
-def split_pins(model, spec):
+def split_pins(model, spec, every=False):
     pins = {}
     for name, es in model.hinges.items():
-        if is_pin(spec, name):
+        if every or is_pin(spec, name):
             for e in es:
                 pins[e] = name
     if not pins:
-        return model, [], [], []
+        return model, [], [], [], []
     m = model.copy()
-    m.hinges = {k: v for k, v in m.hinges.items() if not is_pin(spec, k)}
+    m.hinges = {k: v for k, v in m.hinges.items() if not (every or is_pin(spec, k))}
     at = {}
     for fi, s in enumerate(model.shells):
         for v in s:
@@ -125,15 +125,17 @@ def split_pins(model, spec):
                 m.shells[f] = [new if i == v else i for i in m.shells[f]]
     m.nodes = np.array(nodes, dtype=float)
     pairs = []
+    joints = []
     faces_of = model.shell_edges()
-    for e in pins:
+    for e, name in pins.items():
         fl = faces_of.get(e, [])
         keyed = []
         for f in fl:
             s0, s1 = model.shells[f], m.shells[f]
             a, b = s1[s0.index(e[0])], s1[s0.index(e[1])]
             keyed.append((min(a, b), max(a, b)))
-        for k in keyed[1:]:
+        for f, k in zip(fl[1:], keyed[1:]):
             if k != keyed[0]:
                 pairs.append((keyed[0], k))
-    return m, ties, pairs, sorted(set(pins.values()))
+                joints.append((name, keyed[0], k, f))
+    return m, ties, pairs, sorted({n for n in pins.values() if is_pin(spec, n)}), joints
