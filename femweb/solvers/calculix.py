@@ -466,6 +466,9 @@ def solve(model, base, spec, progress=None):
     factors = _factors(dat) if kind == "buckle" else []
     freqs = _freqs(dat) if kind == "modal" else []
     energy = _totals(dat)
+    nmode = len(factors) if kind == "buckle" else len(freqs) if kind == "modal" else 0
+    if nmode and len(disp) > nmode:
+        disp = disp[-nmode:]
     times = []
     reac = []
     umax = []

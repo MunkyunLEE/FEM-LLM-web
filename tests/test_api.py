@@ -57,7 +57,7 @@ def test_divisions_keep_load_total_and_answer():
 def test_panel_buckling_factor_near_theory():
     c.post("/api/examples/shell_panel?preset=1")
     res = c.post("/api/solve").json()["result"]
-    assert res["kind"] == "buckle"
+    assert res["kind"] == "buckle" and len(res["frames"]) == 4
     assert abs(res["summary"]["좌굴 계수"][0] - 30.37) / 30.37 < 0.03
 
 
@@ -96,3 +96,13 @@ def test_upload_obj_and_export():
     post_ops([{"op": "add_bc", "type": "fixed", "select": {"plane": {"axis": "x", "at": "min"}}}, {"op": "add_load", "type": "pressure", "value": 0.01, "select": {"all": True}}])
     inp = c.get("/api/export/inp").text
     assert "*SHELL SECTION" in inp and "*CLOAD" in inp and "S8R" in inp
+
+
+@ccx
+def test_cantilever_modal_frequencies():
+    c.post("/api/examples/cantilever_beam?preset=1")
+    post_ops([{"op": "set_step", "type": "modal", "modes": 3}])
+    res = c.post("/api/solve").json()["result"]
+    f = res["summary"]["고유진동수 (Hz)"]
+    assert len(res["frames"]) == 3
+    assert abs(f[0] - 41.8) / 41.8 < 0.03 and abs(f[1] - 83.5) / 83.5 < 0.03
