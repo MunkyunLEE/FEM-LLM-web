@@ -114,7 +114,7 @@ def check_stl(data):
             s = line.split()
             if len(s) == 4 and s[0] == "vertex":
                 vs.append([float(s[1]), float(s[2]), float(s[3])])
-        if len(vs) < 9 or len(vs) % 3:
+        if len(vs) < 3 or len(vs) % 3:
             raise ValueError("STL 형식을 읽을 수 없습니다")
         tris = np.array(vs).reshape(-1, 3, 3)
     span = float(np.linalg.norm(tris.reshape(-1, 3).max(axis=0) - tris.reshape(-1, 3).min(axis=0))) or 1.0
