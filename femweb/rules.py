@@ -78,7 +78,7 @@ FILLER = (
     r"해\s*주세요|해\s*주십시오|해\s*줘요|해\s*줘라|해\s*줘|해\s*봐라|해\s*봐|해\s*라|해\s*요|합니다|한다|하자|할게|할래|하고\s*싶어|하고\s*싶다|하고|해서|하면|하여|하는|한\s*뒤|한\s*다음|한\s*후|해(?![가-힣])|"
     r"주세요|줘요|줘라|줘|주고|줄래|주자|걸어|걸고|가해|가하고|가한|넣어|넣고|적용|추가|설정|부여|입력|지정|만들어|바꿔|변경|수정|으로써|"
     r"으로|에서|에다가|에다|에게|부터|까지|이며|이고|이다|입니다|이야|인데|"
-    r"구해|구하고|구하|찾아|계산|알려|보여|나머지|바꾸고|바꿔서|바꾸어|변경하고|설정하고|스팬|span|적당히|대충|약|대략|"
+    r"뽑아|추출|켜고|켜서|켜|끄고|꺼|돌아가|되돌아가|올려|얹어|실어|매달아|구해|구하고|구하|찾아|계산|알려|보여|나머지|바꾸고|바꿔서|바꾸어|변경하고|설정하고|스팬|span|적당히|대충|약|대략|"
     r"좀|이제|우선|먼저|다음|그다음|그리고|또한|또|그냥|다시|혹시|제발|한번|전체적으로|각각|모두|전부|전체|모든|총|합계|합|크기|값|만큼|정도|짜리|"
     r"방향|쪽|측|면|변|끝단|끝|단|부분|부위|위치|지점|곳|절점들|절점|노드|엣지|모서리|라인|선|점|것|거|걸|게|수|때|중|"
     r"하중|힘|구속|조건|경계|해석|모델|구조|구조물|형상|재료|재질|단면|요소|메쉬|메시|"
@@ -136,7 +136,8 @@ def split_clauses(text):
     t = re.sub(r"(?<![A-Za-z])([xyzXYZ])\s+and\s+(?=[xyzXYZ](?![A-Za-z]))", "\\1\x01", t)
     t = re.sub(r"(\d)\s*,\s*(?=[-+]?\d)", "\\1\x01", t)
     t = re.sub(r",\s*(?=각도|angle)", " ", t)
-    parts = re.split(r"[\n;]|,|(?<!\d)\.(?!\d)|\s그리고\s|\s또한\s|\s또\s|\sand then\s|\sthen\s|\sand\s|(?<=하고)\s+(?!나머지)|(?<=잡고)\s+|(?<=막고)\s+|(?<=주고)\s+|(?<=걸고)\s+|(?<=넣고)\s+|(?<=키고)\s+|(?<=한 뒤)\s+|(?<=한 후)\s+|\s후에\s|한\s*다음에?\s", t)
+    t = re.sub(r"[^\s,]+\s*(?:말고|대신에?|이?\s*아니라|이?\s*아니고)\s+", "", t)
+    parts = re.split(r"[\n;]|,|(?<!\d)\.(?!\d)|\s그리고\s|\s또한\s|\s또\s|\sand then\s|\sthen\s|\sand\s|(?<=하고)\s+(?!나머지)|(?<=고정|구속|지지)\s+(?=(?:왼|오른|좌측|우측|우단|좌단|위|윗|아래|아랫|상단|하단|상부|하부|바닥|꼭대기|끝|자유단|반대|중앙|가운데|양단|양쪽|테두리|[+-]?[xyzXYZ]\s*(?:최|=|가\s|좌표|[+-]))\S*\s+\S)|(?<=잡고)\s+|(?<=막고)\s+|(?<=주고)\s+|(?<=걸고)\s+|(?<=넣고)\s+|(?<=키고)\s+|(?<=한 뒤)\s+|(?<=한 후)\s+|\s후에\s|한\s*다음에?\s", t)
     return [p.replace("\x01", ",").strip() for p in parts if p and p.strip()]
 
 
@@ -213,8 +214,8 @@ def direction(c, model):
         v[AX.index(a)] = -1.0 if s == "-" else 1.0
         return {"vec": v, "literal": True}
     words = [
-        (r"아래\s*로|아래\s*방향(?:으로)?|아랫\s*방향(?:으로)?|하방(?:으로)?|하향(?:으로)?|연직\s*하(?:방|향)?(?:으로)?|수직\s*아래(?:로)?|밑으로|downwards?|down(?![a-z])", [0.0, 0.0, -1.0]),
-        (r"위\s*로|위\s*방향(?:으로)?|윗\s*방향(?:으로)?|상방(?:으로)?|상향(?:으로)?|upwards?|(?<![a-z])up(?![a-z])", [0.0, 0.0, 1.0]),
+        (r"아래\s*로|아래\s*방향(?:으로)?|아랫\s*방향(?:으로)?|하방(?:으로)?|하향(?:으로)?|연직\s*하(?:방|향)?(?:으로)?|수직\s*아래(?:로)?|밑으로|아래\s*$|downwards?|down(?![a-z])", [0.0, 0.0, -1.0]),
+        (r"위\s*로|위\s*방향(?:으로)?|윗\s*방향(?:으로)?|상방(?:으로)?|상향(?:으로)?|(?<![가-힣])위\s*$|upwards?|(?<![a-z])up(?![a-z])", [0.0, 0.0, 1.0]),
         (r"왼쪽\s*으로|좌측\s*으로|왼쪽\s*방향(?:으로)?|leftwards?|to the left", [-1.0, 0.0, 0.0]),
         (r"오른쪽\s*으로|우측\s*으로|오른쪽\s*방향(?:으로)?|rightwards?|to the right", [1.0, 0.0, 0.0]),
         (r"앞\s*으로|앞쪽\s*으로|전방(?:으로)?|forwards?", [0.0, -1.0, 0.0]),
@@ -224,6 +225,15 @@ def direction(c, model):
         if c.take(pat):
             return {"vec": v, "literal": False}
     return None
+
+
+def loose_axis(c):
+    m = c.take(r"(?<![a-z\d])([-+]?)\s*([xyz])(?![a-z\d])")
+    if not m:
+        return None
+    v = [0.0, 0.0, 0.0]
+    v[AX.index(m.group(2))] = -1.0 if m.group(1) == "-" else 1.0
+    return {"vec": v, "literal": True}
 
 
 def tuple3(c, after=""):
@@ -321,9 +331,12 @@ def selection(c, model, spec, ctx):
             planes.append((L, "max"))
     ext = hi - lo
     V = "z" if ext[2] > 1e-6 * span else "y"
+    if c.take(r"한\s*쪽\s*(?:끝단|끝|면|변)?|한\s*끝|one end|one side"):
+        planes.append((L, "min"))
+        ctx.setdefault("info", []).append(f"'한쪽'을 {L} 최소 쪽으로 보았습니다")
     words = [
-        (r"바닥\s*면|바닥|하단|하부|아래\s*쪽|아랫\s*면|아랫\s*쪽|아래\s*면|밑\s*면|밑\s*바닥|맨\s*아래|bottom|아래(?!로|\s*방향)", V, "min"),
-        (r"상단|상부|윗\s*면|위\s*쪽|윗\s*쪽|위\s*면|꼭대기|맨\s*위|천장|top(?![a-z])|(?<![가-힣])위(?!치|로|\s*방향|[가-힣])", V, "max"),
+        (r"바닥\s*면|바닥|하단|하부|아래\s*쪽|아랫\s*면|아랫\s*쪽|아래\s*면|밑\s*면|밑\s*바닥|맨\s*아래|bottom|아래(?!로|\s*방향|\s*$)|(?<![가-힣])밑(?=\s|에|을|은|의|쪽|$)", V, "min"),
+        (r"상단|상부|윗\s*면|위\s*쪽|윗\s*쪽|위\s*면|꼭대기|맨\s*위|천장|top(?![a-z])|(?<![가-힣])위(?=\s+\S|에|를|는|은|의|쪽)", V, "max"),
         (r"왼\s*쪽|좌측|좌단|왼\s*편|left(?![a-z])", "x", "min"),
         (r"오른\s*쪽|우측|우단|오른\s*편|right(?![a-z])", "x", "max"),
         (r"앞\s*쪽|앞\s*면|전면|정면|front(?![a-z])", "y", "min"),
@@ -332,6 +345,12 @@ def selection(c, model, spec, ctx):
     for pat, ax, at in words:
         if c.take(pat):
             planes.append((ax, at))
+    if not planes and not others and c.take(r"(?<![가-힣])끝(?:\s*부분)?(?=에|을|은|의|\s|$)"):
+        ref = fixed_plane(spec, L) or fixed_plane(spec)
+        if ref is None and ctx.get("sel"):
+            ps = [p for p in sel_planes(ctx["sel"]) if p.get("at") in ("min", "max")]
+            ref = ps[0] if ps else None
+        planes.append((ref["axis"], "max" if ref["at"] == "min" else "min") if ref else (L, "max"))
     if c.take(r"네\s*변|4\s*변|사\s*변|모든\s*변|전체\s*변|둘레|테두리|가장자리|외곽\s*(?:선|엣지|변)?|자유\s*(?:엣지|변)|경계\s*(?:엣지|변|선)|all\s*(?:four\s*)?edges|four edges|perimeter|outer edges?|free edges?"):
         others.append({"boundary": True})
     if c.take(r"네\s*(?:모서리|꼭짓점|꼭지점|귀퉁이|코너)|4\s*(?:모서리|꼭짓점|코너)|꼭짓점들?|꼭지점들?|귀퉁이|코너|(?:four\s*)?corners?"):
@@ -549,7 +568,7 @@ def parse_clause(text, model, spec, ctx):
         pool = spec["bcs"] + spec["loads"] + spec["plots"]
         if not any(x["id"] == target for x in pool):
             return [], [f"{target} 항목이 없습니다"], [], [], {}
-    if c.take(r"삭제|지워|제거|없애|빼\s*줘|remove|delete|drop"):
+    if not c.has(r"항복|소성|yield|plastic|힌지|조인트|접힘\s*선|결함|비선형|hinge|joint") and c.take(r"삭제|지워|제거|없애|빼\s*줘|remove|delete|drop"):
         if target:
             return [{"op": "remove", "id": target}], [], [], c.leftover(), {}
         m_last = c.take(r"마지막|방금|최근|last|latest")
@@ -565,7 +584,7 @@ def parse_clause(text, model, spec, ctx):
             return [{"op": "clear", "what": "all"}], [], [], c.leftover(), {}
         return [], ["무엇을 삭제할지 알려주세요 (예: bc1 삭제, 하중 모두 삭제)"], [], [], {}
     if c.take(r"초기화|리셋|reset|clear"):
-        what = "bcs" if c.take(r"구속|경계\s*조건|지지") else "loads" if c.take(r"하중|힘") else "plots" if c.take(r"그래프|플롯") else "all"
+        what = "bcs" if c.take(r"구속|경계\s*조건|지지|bcs?|constraints?|supports?|boundary conditions?") else "loads" if c.take(r"하중|힘|loads?|forces?") else "plots" if c.take(r"그래프|플롯|plots?|graphs?") else "all"
         return [{"op": "clear", "what": what}], [], [], c.leftover(), {}
 
     if re.search(r"(?:해석|계산|시뮬레이션|simulation)\s*(?:을|를|도)?\s*(?:실행|돌려|돌리|시작|수행|해\s*줘|해\s*봐|해\s*라|하자|ㄱㄱ|고고|go)|(?:^|\s)(?:run|solve)(?![a-z])|^\s*(?:돌려|실행)(?:해)?\s*(?:줘|봐)?\s*$|풀어\s*(?:줘|봐)", t):
@@ -581,7 +600,7 @@ def parse_clause(text, model, spec, ctx):
         c.takeall(r"실행|돌려|돌리|시작|수행|ㄱㄱ|고고|(?<![a-z])(?:run|solve|go)(?![a-z])|풀어|계산|시뮬레이션|simulation")
 
     st = {}
-    if c.take(r"선형\s*좌굴|좌굴|buckl(?:e|ing)|고유치\s*좌굴"):
+    if c.take(r"(?:선형\s*|고유치\s*)?좌굴\s*(?:계수|하중|모드)?|buckl(?:e|ing)"):
         st["type"] = "buckle"
     elif c.take(r"모달|모드\s*해석|고유\s*진동수?|진동\s*해석|고유치|고유\s*모드|modal|eigen\s*frequenc(?:y|ies)|natural frequenc(?:y|ies)|frequency analysis|(?<![a-z])frequency(?![a-z])"):
         st["type"] = "modal"
@@ -592,7 +611,7 @@ def parse_clause(text, model, spec, ctx):
     m = c.take(r"(기하\s*)?비\s*선형|대\s*변형|nlgeom|non\s*-?\s*linear|large\s*(?:deformation|displacement)")
     if m:
         st["nlgeom"] = not bool(c.take(r"끄|꺼|off|해제|없이|말고|제외|disable|without"))
-        c.take(r"켜|on(?![a-z])|고려|포함|enable")
+        c.take(r"켜(?:고|서)?|on(?![a-z])|고려|포함|enable")
     elif c.take(r"선형\s*(?:해석)?\s*으로|선형\s*해석|(?<![a-z])linear(?![a-z])"):
         st["nlgeom"] = False
     m = c.take(r"모드\s*(?:수|개수)?\s*(?:를|을|는|=)?\s*(\d+)\s*(?:개)?|(\d+)\s*(?:개\s*)?(?:의\s*)?모드|(\d+)\s*modes?|modes?\s*=?\s*(\d+)")
@@ -650,7 +669,7 @@ def parse_clause(text, model, spec, ctx):
         if c.take(r"(?:모든|전체|전부)\s*(?:내부\s*)?(?:엣지|모서리|변|선|요소\s*경계)|all (?:interior |internal )?edges"):
             mode = "all"
         km0 = c.take(r"(?:강성|kappa|κ|stiffness)\s*(?:비율|비|ratio)\s*(?:를|을|은|는|=)?\s*" + NUM)
-        km1 = None if km0 else c.take(r"(?:회전\s*)?(?:강성|kappa|κ|stiffness)\s*(?:를|을|은|는|=)?\s*" + NUM + r"\s*(?:n\s*[·*]?\s*mm\s*/\s*rad\s*/\s*mm|n\s*/\s*rad|n\s*[·*]?\s*mm\s*/\s*rad)?")
+        km1 = None if km0 else c.take(r"(?:회전\s*)?(?:강성|kappa|κ|stiffness)\s*(?:를|을|은|는|=|to|:)?\s*" + NUM + r"\s*(?:n\s*[·*]?\s*mm\s*/\s*rad\s*/\s*mm|n\s*/\s*rad|n\s*[·*]?\s*mm\s*/\s*rad)?")
         pin = c.take(r"핀\s*-?\s*조인트|핀\s*-?\s*힌지|핀\s*(?:으로|처리|연결|결합|접합)|(?<![가-힣])핀(?![가-힣])|자유\s*회전|회전\s*자유|자유롭게\s*회전|강성\s*(?:이|을|를)?\s*(?:없|제로)|마찰\s*없|pin(?:ned)?\s*-?\s*joints?|(?<![a-z])pin(?:ned)?(?![a-z])|free(?:ly)?\s*rotat\w*|frictionless")
         off = c.take(r"해제|없애|끄(?:고|기)?|꺼|취소|강접|강체\s*연결|강결|일체\s*(?:로|화)|용접|연속\s*(?:으로|체)|rigid|(?<![a-z])off(?![a-z])|disable|remove")
         if off and not pin:
@@ -755,7 +774,9 @@ def parse_clause(text, model, spec, ctx):
         sc = {"": 1.0, "n": 1.0, "kn": 1e3, "kgf": G0, "nmm": 1.0, "nm": 1e3, "knm": 1e6}[u]
         comp.setdefault(m.group(1), [0.0, 0.0, 0.0])[AX.index(m.group(2))] += _f(m, 3) * sc
 
-    is_bc_word = bool(c.has(r"고정|구속|지지|받쳐|받침|막아|막고|잡아|잡고|묶|못\s*움직|움직이지\s*(?:않|못)|(?<![a-z])fix|clamp|constrain|restrain|support|pinned|roller|롤러|이동단|가동단|회전단|대칭|symm|encast|용접|단순보|외팔보|캔틸레버|cantilever|simply"))
+    if c.has(r"반경\s*방향|반지름\s*방향|radial|원주\s*방향|접선\s*방향|tangential|circumferential|원통\s*좌표"):
+        return ops, ["반경·원주 방향 지정은 아직 지원하지 않습니다. x, y, z 방향으로 나눠서 알려주세요"], notes, [], flags
+    is_bc_word = bool(c.has(r"(?<![가-힣])핀(?![가-힣])|(?<![a-z])pin(?![a-z])|고정|구속|지지|받쳐|받침|막아|막고|잡아|잡고|묶|못\s*움직|움직이지\s*(?:않|못)|(?<![a-z])fix|clamp|constrain|restrain|support|pinned|roller|롤러|이동단|가동단|회전단|대칭|symm|encast|용접|단순보|외팔보|캔틸레버|cantilever|simply"))
     scale = scale_word(c)
     qs = quantities(c)
     kinds = [q["kind"] for q in qs]
@@ -822,6 +843,7 @@ def parse_clause(text, model, spec, ctx):
 
     sel, sn = selection(c, model, spec, ctx)
     ask += sn
+    notes += ctx.pop("info", [])
     inherited = False
     L = longest_axis(model)
 
@@ -849,6 +871,17 @@ def parse_clause(text, model, spec, ctx):
             inherited = True
         per_node = c.take(r"절점\s*당|절점\s*마다|노드\s*당|노드\s*마다|각\s*절점(?:에|마다)?|각\s*노드(?:에|마다)?|per node|each node|at each node")
         d = direction(c, model)
+        side = c.take(r"옆\s*으로|수평\s*(?:으로|방향)|가로\s*(?:로|방향)|횡\s*방향|sideways|horizontal(?:ly)?|lateral(?:ly)?")
+        if d is None and not side and c.take(r"올려|얹어|얹고|실어|매달|무게|weight|hang"):
+            d = {"vec": [0.0, 0.0, -1.0], "literal": False}
+        if side and d is None:
+            ask.append("'옆으로'가 x 방향인지 y 방향인지 알려주세요 (예: x 방향으로 500 N)")
+            return ops, ask, notes, [], flags
+        if d is None and c.take(r"수직\s*(?=하중|으로|방향|힘)|연직\s*(?=하중|으로|방향|힘)|vertical(?:ly)?"):
+            d = {"vec": [0.0, 0.0, -1.0], "literal": False}
+            notes.append("수직 하중을 아래 방향(-z)으로 보았습니다")
+        if d is None and not c.has(r"압축|인장|compress|tens|누르|눌러|당기|당겨|밀어"):
+            d = loose_axis(c)
         comp_word = c.take(r"압축|compress\w*|누르는|눌러|밀어")
         tens_word = None if comp_word else c.take(r"인장|tens\w*|당기는|당겨|pull\w*")
         made = False
@@ -982,6 +1015,8 @@ def parse_clause(text, model, spec, ctx):
                     notes.append("솔리드 요소에는 회전 자유도가 없어 지정 회전이 적용되지 않습니다")
         elif ql:
             d = direction(c, model)
+            if d is None and not c.has(r"압축|인장|compress|tens|누르|눌러|당기|당겨|밀어|늘려|줄여|벌려"):
+                d = loose_axis(c)
             comp_word = c.take(r"압축|compress\w*|눌러|누르|밀어|밀고|push\w*|줄여")
             tens_word = None if comp_word else c.take(r"인장|당겨|당기|늘려|늘리|벌려|stretch\w*|pull\w*|tens\w*")
             v = None
@@ -1005,7 +1040,7 @@ def parse_clause(text, model, spec, ctx):
             ctx["sel"] = sel
         if inherited and ops:
             notes.append("위치는 앞 문장과 같은 곳으로 보았습니다")
-        c.takeall(r"강제\s*변위|지정\s*변위|강제|변위|이동|회전|접어|접고|fold\w*|움직여|움직이|시켜|displace\w*|move\w*|rotat\w*|prescribed|enforced|만큼|으로|로")
+        c.takeall(r"강제\s*변위|지정\s*변위|강제|변위|이동|회전|비틀\w*|twist\w*|접어|접고|fold\w*|내려|올려|낮춰|들어|움직여|움직이|시켜|displace\w*|move\w*|rotat\w*|prescribed|enforced|만큼|으로|로")
         return ops, ask, notes, c.leftover(), flags
 
     if is_bc_word:

@@ -135,3 +135,58 @@ def test_theory_page_is_served(client):
     r = client.get("/theory.html")
     assert r.status_code == 200 and "유한요소해석" in r.text
     assert 'href="/theory.html"' in client.get("/").text
+
+
+def test_rule_first_skips_llm_for_clear_sentences(client):
+    server.S["llm"]["mode"] = "rule_first"
+    try:
+        client.post("/api/examples/cantilever_beam?preset=0")
+        SEEN.clear()
+        r = client.post("/api/chat", json={"text": "왼쪽 끝을 고정하고 오른쪽 끝에 아래로 2 kN"}).json()
+        assert SEEN == [] and r["chat"]["engine"] == "rule" and r["chat"]["error"] is None
+        assert len(r["spec"]["bcs"]) == 1 and r["preview"]["loads"][0]["total"] == [0.0, 0.0, -2000.0]
+        r = client.post("/api/chat", json={"text": "오른쪽 끝에 1 kN"}).json()
+        assert SEEN == [] and "방향" in r["chat"]["reply"] and len(r["spec"]["loads"]) == 1
+    finally:
+        server.S["llm"]["mode"] = "llm"
+
+
+def test_rule_first_sends_unclear_sentences_to_llm(client):
+    server.S["llm"]["mode"] = "rule_first"
+    try:
+        client.post("/api/examples/cantilever_beam?preset=0")
+        REPLIES[:] = ['{"ops":[{"op":"add_bc","type":"fixed","select":{"plane":{"axis":"x","at":"min"}}}],"reply":"고정했습니다."}']
+        SEEN.clear()
+        r = client.post("/api/chat", json={"text": "벽에 붙은 쪽을 단단히 잡아놔"}).json()
+        assert len(SEEN) == 1 and r["chat"]["engine"] == "llm" and len(r["spec"]["bcs"]) == 1
+    finally:
+        server.S["llm"]["mode"] = "llm"
+
+
+def test_rule_first_without_llm_applies_what_it_understood(client):
+    client.post("/api/examples/cantilever_beam?preset=0")
+    url = server.S["llm"]["url"]
+    server.S["llm"].update({"url": "http://127.0.0.1:9/v1", "mode": "rule_first"})
+    try:
+        r = client.post("/api/chat", json={"text": "왼쪽 끝 고정, 그리고 뭔가 멋지게 해줘"}).json()
+    finally:
+        server.S["llm"].update({"url": url, "mode": "llm"})
+    assert r["chat"]["engine"] == "rule" and len(r["spec"]["bcs"]) == 1
+    assert "이해하지 못한" in r["chat"]["reply"] and "연결하지 못해" in r["chat"]["note"]
+
+
+def test_undo_and_run_action(client):
+    server.S["llm"]["mode"] = "rule_first"
+    try:
+        client.post("/api/examples/cantilever_beam?preset=1")
+        n = len(client.get("/api/state").json()["spec"]["loads"])
+        r = client.post("/api/chat", json={"text": "끝단에 y 방향으로 300 N"}).json()
+        assert len(r["spec"]["loads"]) == n + 1 and r["can_undo"]
+        r = client.post("/api/chat", json={"text": "되돌려"}).json()
+        assert len(r["spec"]["loads"]) == n
+        r = client.post("/api/chat", json={"text": "해석 실행해줘"}).json()
+        assert r["chat"]["action"] == "solve"
+        client.post("/api/chat", json={"text": "하중 2배"})
+        assert client.post("/api/undo").json()["spec"]["loads"][0]["vector"] == [0.0, 0.0, -1000.0]
+    finally:
+        server.S["llm"]["mode"] = "llm"
