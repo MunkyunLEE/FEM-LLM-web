@@ -682,9 +682,14 @@ async function sendChat(text) {
   addMsg('user', text);
   $('chatInput').value = '';
   const wait = el('div', 'msg bot', '');
+  const label = document.createElement('span');
+  const stop = el('button', 'danger stop', 'LLM 중단');
+  stop.type = 'button';
+  stop.onclick = () => api('/api/cancel/llm', { method: 'POST' }).catch(() => {});
+  wait.append(label, stop);
   const t0 = Date.now();
   const tick = () => {
-    wait.textContent = '처리 중… ' + Math.round((Date.now() - t0) / 1000) + '초 (로컬 LLM은 처음 1~2분 걸릴 수 있습니다)';
+    label.textContent = '처리 중… ' + Math.round((Date.now() - t0) / 1000) + '초 (로컬 LLM은 처음 1~2분 걸릴 수 있습니다)';
   };
   tick();
   const timer = setInterval(tick, 1000);
@@ -700,7 +705,8 @@ async function sendChat(text) {
   } catch (e) {
     clearInterval(timer);
     wait.remove();
-    addMsg('bot', '', { error: e.message });
+    if (e.message.includes('중단')) addMsg('bot', e.message);
+    else addMsg('bot', '', { error: e.message });
   }
 }
 
@@ -853,6 +859,7 @@ function bind() {
     const b = $('solve');
     b.disabled = true;
     b.textContent = '해석 중…';
+    $('cancelSolve').hidden = false;
     note('');
     try {
       const s = await api('/api/solve', { method: 'POST' });
@@ -862,9 +869,11 @@ function bind() {
     } catch (e) {
       note(e.message, true);
     }
+    $('cancelSolve').hidden = true;
     b.disabled = false;
     b.textContent = '해석 실행';
   };
+  $('cancelSolve').onclick = () => api('/api/cancel/solve', { method: 'POST' }).catch(() => {});
   $('fit').onclick = fit;
   for (const id of ['showSymbols', 'showEdges', 'showResult']) $(id).onchange = applyVisibility;
   $('frame').oninput = (e) => {

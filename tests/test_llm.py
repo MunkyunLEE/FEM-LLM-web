@@ -80,3 +80,36 @@ def test_auto_mode_falls_back_to_rules_when_llm_is_down(client):
         server.S["llm"].update({"url": url, "mode": "llm"})
     assert r["chat"]["engine"] == "rule" and "규칙 기반" in r["chat"]["note"]
     assert len(r["spec"]["bcs"]) == 1
+
+
+def test_llm_request_can_be_cancelled(client):
+    import time
+
+    from femweb import llm
+
+    class Slow(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            time.sleep(8)
+
+    slow = HTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=slow.serve_forever, daemon=True).start()
+    cfg = {"url": f"http://127.0.0.1:{slow.server_port}/v1", "model": "qwen3:mock", "mode": "llm", "key": ""}
+    res = {}
+
+    def run():
+        try:
+            llm.ask_llm(cfg, "x", "ctx")
+        except Exception as e:
+            res["e"] = e
+
+    th = threading.Thread(target=run)
+    th.start()
+    time.sleep(0.6)
+    assert llm.cancel() is True
+    th.join(timeout=3)
+    slow.shutdown()
+    assert isinstance(res.get("e"), llm.Cancelled)

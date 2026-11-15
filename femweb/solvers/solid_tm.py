@@ -168,7 +168,7 @@ def solve(model, spec, progress=None):
         M = LinearOperator((len(free), len(free)), matvec=pre.solve)
         ft = torch.tensor(free)
         u = torch.zeros(n * 3, dtype=dt)
-        inc = max(1, int(st.get("increments", 10)))
+        inc = max(1, int(st.get("increments", 25)))
         fnorm = max(float(np.linalg.norm(F)), 1e-12)
 
         def grad(uv, graph=False):

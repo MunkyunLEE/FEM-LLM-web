@@ -1,6 +1,63 @@
+import http.client
 import json
 import os
 import re
+import socket
+import threading
+import urllib.parse
+
+
+class Cancelled(Exception):
+    pass
+
+
+ACTIVE = {"conn": None, "cancelled": False}
+_alock = threading.Lock()
+
+
+def cancel():
+    with _alock:
+        ACTIVE["cancelled"] = True
+        c = ACTIVE["conn"]
+    if c is not None:
+        try:
+            c.sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            c.close()
+        except Exception:
+            pass
+    return c is not None
+
+
+def _post(url, body, headers, timeout):
+    u = urllib.parse.urlsplit(url)
+    cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+    c = cls(u.hostname, u.port, timeout=timeout)
+    with _alock:
+        if ACTIVE["cancelled"]:
+            raise Cancelled()
+        ACTIVE["conn"] = c
+    try:
+        path = u.path + ("?" + u.query if u.query else "")
+        c.request("POST", path, body=json.dumps(body).encode("utf-8"), headers=headers)
+        r = c.getresponse()
+        data = r.read()
+        if r.status >= 400:
+            raise RuntimeError(f"HTTP {r.status}: {data[:200].decode('utf-8', 'replace')}")
+        return json.loads(data)
+    except Exception as e:
+        if ACTIVE["cancelled"]:
+            raise Cancelled() from e
+        raise
+    finally:
+        with _alock:
+            ACTIVE["conn"] = None
+        try:
+            c.close()
+        except Exception:
+            pass
 
 SYSTEM = """You convert a structural engineer's request (Korean or English) into JSON edit operations for an FEM model spec.
 Reply with ONE JSON object only: {"ops": [...], "reply": "<short Korean sentence describing what you did or what is unclear>"}.
@@ -43,7 +100,7 @@ Example: "시간-총에너지 그래프 그려줘" ->
 
 DEFAULTS = {
     "url": os.environ.get("FEMWEB_LLM_URL", "http://localhost:11434/v1"),
-    "model": os.environ.get("FEMWEB_LLM_MODEL", "qwen3:14b"),
+    "model": os.environ.get("FEMWEB_LLM_MODEL", "qwen3:8b"),
     "key": os.environ.get("FEMWEB_LLM_KEY", ""),
     "mode": os.environ.get("FEMWEB_LLM_MODE", "auto"),
 }
@@ -70,8 +127,8 @@ def _extract(text):
 
 
 def ask_llm(cfg, text, ctx, history=None, error=None):
-    import httpx
-
+    with _alock:
+        ACTIVE["cancelled"] = False
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": ctx}]
     for h in (history or [])[-6:]:
         msgs.append({"role": h["role"], "content": h["content"]})
@@ -83,9 +140,8 @@ def ask_llm(cfg, text, ctx, history=None, error=None):
     if cfg.get("key"):
         headers["Authorization"] = "Bearer " + cfg["key"]
     body = {"model": cfg["model"], "messages": msgs, "temperature": 0, "stream": False, "response_format": {"type": "json_object"}}
-    r = httpx.post(cfg["url"].rstrip("/") + "/chat/completions", json=body, headers=headers, timeout=900)
-    r.raise_for_status()
-    data = _extract(r.json()["choices"][0]["message"]["content"])
+    resp = _post(cfg["url"].rstrip("/") + "/chat/completions", body, headers, 900)
+    data = _extract(resp["choices"][0]["message"]["content"])
     ops = data.get("ops", [])
     if not isinstance(ops, list):
         raise ValueError("ops 가 배열이 아닙니다")

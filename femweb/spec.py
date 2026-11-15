@@ -25,7 +25,7 @@ def default_spec(model=None):
         "hinges": {"*": {"kappa": None, "ratio": 0.1}},
         "bcs": [],
         "loads": [],
-        "step": {"type": "static", "nlgeom": False, "increments": 10, "modes": 5, "imperfection": 0.0},
+        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0},
         "plots": [],
     }
 

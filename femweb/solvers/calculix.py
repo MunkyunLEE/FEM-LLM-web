@@ -192,7 +192,7 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
         L += [f"{n + 1}, {d}, {d}, 0." for n, d in zero]
     kind = st["type"]
     nl = bool(st.get("nlgeom")) or plastic
-    inc = max(1, int(st.get("increments", 10)))
+    inc = max(1, int(st.get("increments", 25)))
     if kind == "buckle":
         L += ["*STEP", "*BUCKLE", f"{int(st.get('modes', 5))}"]
     elif kind == "modal":

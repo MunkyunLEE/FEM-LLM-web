@@ -379,7 +379,7 @@ def solve(model, spec, progress=None):
     F, M, _ = lumped(model, spec)
     F0[:n0] = F
     st = spec["step"]
-    n = max(1, int(st.get("increments", 10)))
+    n = max(1, int(st.get("increments", 25)))
     msgs = []
     if np.abs(M).sum() > 0:
         msgs.append("바-힌지 모델에는 회전 자유도가 없어 모멘트 하중은 무시했습니다")

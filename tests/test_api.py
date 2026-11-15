@@ -106,3 +106,35 @@ def test_cantilever_modal_frequencies():
     f = res["summary"]["고유진동수 (Hz)"]
     assert len(res["frames"]) == 3
     assert abs(f[0] - 41.8) / 41.8 < 0.03 and abs(f[1] - 83.5) / 83.5 < 0.03
+
+
+def test_default_increments_is_25():
+    c.post("/api/examples/cantilever_beam?preset=0")
+    assert c.get("/api/state").json()["spec"]["step"]["increments"] == 25
+
+
+def test_cancel_endpoints_without_active_job():
+    assert c.post("/api/cancel/solve").json() == {"cancelled": False}
+    assert c.post("/api/cancel/llm").json() == {"cancelled": False}
+
+
+def test_solve_can_be_cancelled():
+    import threading
+    import time
+
+    c.post("/api/examples/cantilever_solid?preset=0")
+    post_ops([{"op": "set_solver", "solver": "calculix"}, {"op": "set_divisions", "divisions": 1}])
+    out = {}
+
+    def run():
+        out["r"] = c.post("/api/solve")
+
+    th = threading.Thread(target=run)
+    th.start()
+    for _ in range(100):
+        time.sleep(0.1)
+        if c.post("/api/cancel/solve").json()["cancelled"]:
+            break
+    th.join(timeout=30)
+    assert out["r"].status_code == 409 and "중단" in out["r"].json()["detail"]
+    assert c.post("/api/solve").status_code in (200, 422)

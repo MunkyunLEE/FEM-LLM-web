@@ -23,7 +23,7 @@
       <h2>솔버 · 스텝</h2>
       <div class="row"><select id="solver"><option value="calculix">CalculiX (바·쉘 FEM)</option><option value="barhinge">바-힌지 (간이 검토)</option><option value="tensormesh">TensorMesh (솔리드)</option></select></div>
       <div class="row two"><label>해석 종류<select id="stepType"><option value="static">정적</option><option value="buckle">좌굴</option><option value="modal">모달</option><option value="arclength">호장법</option></select></label><label class="check"><input type="checkbox" id="nlgeom">기하비선형</label></div>
-      <div class="row three"><label>증분<input id="increments" type="number" min="1" value="10"></label><label>모드 수<input id="modes" type="number" min="1" value="5"></label><label>초기결함<input id="imperfection" type="number" step="any" value="0"></label></div>
+      <div class="row three"><label>증분<input id="increments" type="number" min="1" value="25"></label><label>모드 수<input id="modes" type="number" min="1" value="5"></label><label>초기결함<input id="imperfection" type="number" step="any" value="0"></label></div>
     </section>
     <section>
       <h2>재료 · 단면 <small>mm · N · MPa</small></h2>
@@ -40,6 +40,7 @@
     </section>
     <section class="run">
       <button id="solve" class="primary">해석 실행</button>
+      <button id="cancelSolve" class="danger" type="button" hidden>해석 강제 중단</button>
       <div class="row two"><a id="expInp" class="btn ghost" href="/api/export/inp">.inp 내보내기</a><a id="expSpec" class="btn ghost" href="/api/export/spec">스펙 JSON</a></div>
       <div id="solveMsg" class="info"></div>
     </section>

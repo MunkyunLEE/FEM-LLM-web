@@ -42,7 +42,7 @@ Ollama (로컬 LLM, 선택):
 ```bash
 brew install ollama        # 또는 https://ollama.com/download 의 앱 설치
 ollama serve               # 앱으로 설치했다면 생략
-ollama pull qwen3:14b
+ollama pull qwen3:8b
 ```
 
 LLM이 없어도 규칙 기반 해석기가 대신 동작하므로 화면 흐름은 그대로 쓸 수 있습니다.
@@ -55,7 +55,7 @@ python -m femweb
 
 브라우저에서 `http://127.0.0.1:8765` 가 열립니다. 서버가 화면까지 함께 제공하므로 별도 웹 호스팅은 필요 없습니다.
 
-환경변수: `FEMWEB_LLM_URL` (기본 `http://localhost:11434/v1`), `FEMWEB_LLM_MODEL` (기본 `qwen3:14b`), `FEMWEB_LLM_KEY`, `FEMWEB_LLM_MODE` (`auto` · `llm` · `rule`), `FEMWEB_CCX`, `FEMWEB_LLM_THINK` (1 이면 Qwen3 의 생각 단계를 켬, 기본은 끔). 맥 GPU 메모리가 빠듯하면 `qwen3:8b` 를 쓰세요. LLM 설정은 화면 오른쪽 위에서도 바꿀 수 있고, OpenAI 호환 엔드포인트면 어떤 것이든 연결됩니다.
+환경변수: `FEMWEB_LLM_URL` (기본 `http://localhost:11434/v1`), `FEMWEB_LLM_MODEL` (기본 `qwen3:8b`), `FEMWEB_LLM_KEY`, `FEMWEB_LLM_MODE` (`auto` · `llm` · `rule`), `FEMWEB_CCX`, `FEMWEB_LLM_THINK` (1 이면 Qwen3 의 생각 단계를 켬, 기본은 끔). 더 정확한 답이 필요하면 `qwen3:14b` 를 쓰세요 (느립니다). LLM 설정은 화면 오른쪽 위에서도 바꿀 수 있고, OpenAI 호환 엔드포인트면 어떤 것이든 연결됩니다.
 
 ## 지오메트리 규칙
 

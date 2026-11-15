@@ -1,5 +1,7 @@
 import json
+import multiprocessing
 import os
+import signal
 import threading
 import time
 import traceback
@@ -211,6 +213,8 @@ def chat(body: Chat):
                     apply_ops(S["spec"], ops, m if not any(o.get("op") in ("set_solver", "set_divisions") for o in ops if isinstance(o, dict)) else None)
                 except Exception as e:
                     ops, reply = llm.ask_llm(cfg, text, ctx, S["chat"], error=str(e))
+            except llm.Cancelled:
+                fail("LLM 요청을 중단했습니다", 409)
             except Exception as e:
                 if cfg["mode"] == "llm":
                     fail(f"LLM 호출 실패: {e}")
@@ -233,22 +237,81 @@ def chat(body: Chat):
         return out
 
 
-def run_solver():
-    spec = S["spec"]
-    m = active()
+def _solve_with(m, base, spec):
     if spec["solver"] == "calculix":
-        return calculix.solve(m, S["base"], spec)
+        return calculix.solve(m, base, spec)
     if spec["solver"] == "barhinge":
-        if S["base"].kind != "obj":
+        if base.kind != "obj":
             raise ValueError("바-힌지 솔버는 OBJ 쉘 패널 모델에만 쓸 수 있습니다")
         from .solvers import barhinge
 
-        return barhinge.solve(S["base"], spec)
+        return barhinge.solve(base, spec)
     if spec["solver"] == "tensormesh":
         from .solvers import solid_tm
 
         return solid_tm.solve(m, spec)
     raise ValueError("알 수 없는 솔버")
+
+
+def _worker(conn, m, base, spec):
+    try:
+        os.setpgrp()
+    except Exception:
+        pass
+    try:
+        conn.send(("ok", _solve_with(m, base, spec)))
+    except BaseException as e:
+        conn.send(("err", str(e), traceback.format_exc()))
+    finally:
+        conn.close()
+
+
+JOB = {"proc": None, "cancelled": False}
+
+
+def _kill(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def run_solver():
+    ctx = multiprocessing.get_context("spawn")
+    parent, child = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=_worker, args=(child, active(), S["base"], S["spec"]), daemon=True)
+    JOB["cancelled"] = False
+    proc.start()
+    JOB["proc"] = proc
+    child.close()
+    try:
+        while True:
+            if parent.poll(0.2):
+                try:
+                    msg = parent.recv()
+                except EOFError:
+                    msg = None
+                break
+            if not proc.is_alive():
+                msg = parent.recv() if parent.poll(0.5) else None
+                break
+        if JOB["cancelled"]:
+            raise RuntimeError("해석을 중단했습니다")
+        if msg is None:
+            raise RuntimeError("해석 프로세스가 결과 없이 종료되었습니다")
+        if msg[0] == "err":
+            print(msg[2])
+            raise RuntimeError(msg[1])
+        return msg[1]
+    finally:
+        _kill(proc)
+        proc.join(timeout=5)
+        JOB["proc"] = None
+        parent.close()
 
 
 @app.post("/api/solve")
@@ -259,11 +322,27 @@ def solve():
         try:
             S["result"] = run_solver()
         except Exception as e:
-            traceback.print_exc()
+            if JOB["cancelled"]:
+                fail("해석을 중단했습니다", 409)
             fail(e, 422)
         S["stale"] = False
         S["solve_time"] = round(time.time() - t, 2)
         return state(view=False)
+
+
+@app.post("/api/cancel/solve")
+def cancel_solve():
+    p = JOB["proc"]
+    if p is None:
+        return {"cancelled": False}
+    JOB["cancelled"] = True
+    _kill(p)
+    return {"cancelled": True}
+
+
+@app.post("/api/cancel/llm")
+def cancel_llm():
+    return {"cancelled": llm.cancel()}
 
 
 @app.get("/api/result/mesh")
