@@ -16,7 +16,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        body = json.dumps({"data": [{"id": "mock-model"}]}).encode()
+        body = json.dumps({"data": [{"id": "qwen3:mock"}]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -38,7 +38,7 @@ def client():
     srv = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     old = dict(server.S["llm"])
-    server.S["llm"].update({"url": f"http://127.0.0.1:{srv.server_port}/v1", "model": "mock-model", "mode": "llm", "key": ""})
+    server.S["llm"].update({"url": f"http://127.0.0.1:{srv.server_port}/v1", "model": "qwen3:mock", "mode": "llm", "key": ""})
     yield TestClient(server.app)
     server.S["llm"].update(old)
     srv.shutdown()
@@ -53,7 +53,7 @@ def test_llm_ops_are_validated_and_applied(client):
     assert r["preview"]["loads"][0]["total"] == [0.0, 0.0, -2000.0]
     assert len(r["spec"]["bcs"]) == 1
     sent = SEEN[0]
-    assert sent["model"] == "mock-model" and sent["response_format"] == {"type": "json_object"}
+    assert sent["model"] == "qwen3:mock" and sent["response_format"] == {"type": "json_object"}
     assert sent["messages"][-1]["content"].endswith("/no_think")
     assert "MODEL:" in sent["messages"][1]["content"] and '"beam"' in sent["messages"][1]["content"]
 
