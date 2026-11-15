@@ -233,7 +233,7 @@ def chat(body: Chat):
         S["chat"].append({"role": "user", "content": text})
         S["chat"].append({"role": "assistant", "content": json.dumps({"ops": ops, "reply": reply}, ensure_ascii=False)})
         out = state(view=True)
-        out["chat"] = {"reply": reply, "ops": ops, "engine": engine, "note": note, "error": error, "log": log}
+        out["chat"] = {"reply": reply, "ops": ops, "engine": engine, "model": cfg["model"] if engine == "llm" else None, "provider": llm.provider(cfg["url"]) if engine == "llm" else None, "note": note, "error": error, "log": log}
         return out
 
 
@@ -397,6 +397,11 @@ def set_llm(body: LLMCfg):
         if S["llm"]["mode"] not in ("auto", "llm", "rule"):
             S["llm"]["mode"] = "auto"
         return {"llm": llm_public(), "status": llm.llm_status(S["llm"])}
+
+
+@app.post("/api/llm/test")
+def test_llm():
+    return {"llm": llm_public(), "provider": llm.provider(S["llm"]["url"]), "test": llm.test_llm(dict(S["llm"]))}
 
 
 @app.get("/api/llm")

@@ -113,6 +113,10 @@ LLM은 `.inp` 를 쓰지 않고 아래 형태의 수정 지시만 냅니다. 서
 | `cantilever_solid.stl` | 1000×50×100 솔리드 (TensorMesh tet10) | 처짐 0.3829 mm | 0.381 mm, CalculiX C3D10 0.3829 |
 | `cylinder_solid.stl` | R50/R40, L=200 축압축 100 kN | 축변형 0.03365 mm | PL/EA 0.0337 mm |
 
+## 원리 문서
+
+화면 오른쪽 위 `Theory` 버튼 (`/theory.html`) 에 로드맵, 유한요소 수식, 바-힌지 모델, LLM 연결 방식이 정리되어 있습니다.
+
 ## 구현 범위와 한계
 
 - **CalculiX 어댑터**: B31 보, S8R/S6 쉘(중간 절점 자동 생성), C3D10 솔리드. 정적(선형·기하비선형·소성), 좌굴, 모달. 결과는 CalculiX가 펼친 3D 메쉬 그대로 표시합니다

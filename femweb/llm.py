@@ -148,16 +148,76 @@ def ask_llm(cfg, text, ctx, history=None, error=None):
     return ops, str(data.get("reply", ""))
 
 
+def provider(url):
+    u = urllib.parse.urlsplit(url or "")
+    h = (u.hostname or "").lower()
+    if h in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        if u.port == 11434:
+            return "Ollama (이 컴퓨터)"
+        if u.port == 1234:
+            return "LM Studio (이 컴퓨터)"
+        return "로컬 서버 (이 컴퓨터)"
+    names = {
+        "generativelanguage.googleapis.com": "Google Gemini API (클라우드)",
+        "api.openai.com": "OpenAI API (클라우드)",
+        "api.anthropic.com": "Anthropic API (클라우드)",
+        "openrouter.ai": "OpenRouter (클라우드)",
+    }
+    return names.get(h, f"외부 서버 {h}")
+
+
+def _norm(name):
+    return str(name).split("/", 1)[1] if str(name).startswith("models/") else str(name)
+
+
 def llm_status(cfg):
+    import time
+
     import httpx
 
+    u = urllib.parse.urlsplit(cfg["url"])
+    base = {"provider": provider(cfg["url"]), "host": (u.hostname or "") + (f":{u.port}" if u.port else ""), "key_set": bool(cfg.get("key"))}
     try:
-        r = httpx.get(cfg["url"].rstrip("/") + "/models", timeout=2.5, headers={"Authorization": "Bearer " + cfg["key"]} if cfg.get("key") else {})
+        t = time.time()
+        r = httpx.get(cfg["url"].rstrip("/") + "/models", timeout=4, headers={"Authorization": "Bearer " + cfg["key"]} if cfg.get("key") else {})
+        ms = round((time.time() - t) * 1000)
         r.raise_for_status()
-        names = [m.get("id") for m in r.json().get("data", [])]
-        return {"ok": True, "models": names, "has_model": cfg["model"] in names}
+        names = [_norm(m.get("id")) for m in r.json().get("data", [])]
+        return {**base, "ok": True, "ms": ms, "models": names, "has_model": _norm(cfg["model"]) in names}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200], "models": []}
+        return {**base, "ok": False, "error": str(e)[:200], "models": []}
+
+
+def test_llm(cfg):
+    import time
+
+    nothink = "qwen3" in str(cfg.get("model", "")).lower() and os.environ.get("FEMWEB_LLM_THINK", "0") != "1"
+    msgs = [
+        {"role": "system", "content": 'Reply with ONE JSON object only: {"ops": [], "reply": "<short Korean greeting>"}'},
+        {"role": "user", "content": "안녕" + (" /no_think" if nothink else "")},
+    ]
+    headers = {"Content-Type": "application/json"}
+    if cfg.get("key"):
+        headers["Authorization"] = "Bearer " + cfg["key"]
+    body = {"model": cfg["model"], "messages": msgs, "temperature": 0, "stream": False, "response_format": {"type": "json_object"}}
+    with _alock:
+        ACTIVE["cancelled"] = False
+    t = time.time()
+    try:
+        resp = _post(cfg["url"].rstrip("/") + "/chat/completions", body, headers, 300)
+        text = resp["choices"][0]["message"]["content"]
+        try:
+            data = _extract(text)
+            json_ok = True
+            reply = str(data.get("reply", ""))
+        except Exception:
+            json_ok = False
+            reply = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+        return {"ok": True, "ms": round((time.time() - t) * 1000), "model": resp.get("model"), "json_ok": json_ok, "reply": reply[:160]}
+    except Cancelled:
+        return {"ok": False, "error": "중단했습니다"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
 
 
 NUM = r"([-+]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?)"

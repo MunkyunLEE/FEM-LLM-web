@@ -664,7 +664,7 @@ async function refresh(s, opt = {}) {
 function addMsg(role, text, extra) {
   const log = $('chatLog');
   const m = el('div', 'msg ' + (role === 'user' ? 'user' : 'bot'));
-  if (extra && extra.engine) m.append(el('span', 'tag', extra.engine === 'llm' ? 'LLM' : '규칙 기반'));
+  if (extra && extra.engine) m.append(el('span', 'tag', extra.engine === 'llm' ? 'LLM · ' + (extra.model || '') : '규칙 기반'));
   m.append(document.createTextNode(text));
   if (extra && extra.ops && extra.ops.length) m.append(el('div', 'ops', extra.ops.map((o) => JSON.stringify(o)).join('\n')));
   if (extra && extra.note) m.append(el('div', 'notetxt', extra.note));
@@ -756,6 +756,7 @@ async function llmRefresh(save) {
   $('llmModel').value = r.llm.model;
   $('llmMode').value = r.llm.mode;
   const s = $('llmStatus');
+  renderLlmInfo(r);
   if (r.llm.mode === 'rule') {
     s.textContent = '규칙 기반 사용';
     s.className = '';
@@ -766,6 +767,49 @@ async function llmRefresh(save) {
     s.textContent = '연결 안 됨 → 규칙 기반으로 대체';
     s.className = 'bad';
   }
+}
+
+function renderLlmInfo(r, test) {
+  const box = $('llmInfo');
+  const stt = r.status || {};
+  const rows = [];
+  const add = (k, v, cls) => {
+    const d = document.createElement('div');
+    const b = document.createElement('b');
+    b.textContent = k + ' ';
+    const sp = document.createElement('span');
+    sp.textContent = v;
+    if (cls) sp.className = cls;
+    d.append(b, sp);
+    rows.push(d);
+  };
+  add('연결 대상', `${stt.provider || r.provider || ''} · ${stt.host || ''}`);
+  add('모델', r.llm.model, stt.ok ? (stt.has_model ? 'good' : 'badt') : '');
+  add('API 키', r.llm.has_key ? '입력됨' : '없음');
+  if (r.llm.mode === 'rule') add('현재 방식', 'LLM을 부르지 않고 규칙 기반만 사용 중');
+  else if (stt.ok) add('서버 응답', `정상 (${stt.ms} ms) · 모델 ${stt.models.length}개 목록${stt.has_model ? '에 선택한 모델이 있음' : '에 선택한 모델이 없음'}`, stt.has_model ? 'good' : 'badt');
+  else add('서버 응답', '연결 실패: ' + (stt.error || ''), 'badt');
+  if (test) {
+    if (test.ok) add('실제 응답', `성공 (${(test.ms / 1000).toFixed(1)}초) · 응답한 모델 ${test.model || '?'} · JSON ${test.json_ok ? '정상' : '아님'} · "${test.reply}"`, test.json_ok ? 'good' : 'badt');
+    else add('실제 응답', '실패: ' + test.error, 'badt');
+  }
+  box.replaceChildren(...rows);
+}
+
+async function llmTest() {
+  const b = $('llmTest');
+  b.disabled = true;
+  b.textContent = '테스트 중… (로컬 모델은 첫 응답이 느립니다)';
+  try {
+    await llmRefresh(true);
+    const t = await api('/api/llm/test', { method: 'POST' });
+    const r = await api('/api/llm');
+    renderLlmInfo(r, t.test);
+  } catch (e) {
+    note(e.message, true);
+  }
+  b.disabled = false;
+  b.textContent = '실제 응답 테스트';
 }
 
 function pickNode(ev) {
@@ -901,6 +945,7 @@ function bind() {
       showFrame();
     }, 220);
   };
+  $('llmTest').onclick = llmTest;
   $('chatForm').onsubmit = (e) => {
     e.preventDefault();
     sendChat($('chatInput').value);

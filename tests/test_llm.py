@@ -113,3 +113,25 @@ def test_llm_request_can_be_cancelled(client):
     th.join(timeout=3)
     slow.shutdown()
     assert isinstance(res.get("e"), llm.Cancelled)
+
+
+def test_provider_names():
+    from femweb import llm
+
+    assert llm.provider("http://localhost:11434/v1") == "Ollama (이 컴퓨터)"
+    assert llm.provider("https://generativelanguage.googleapis.com/v1beta/openai/").startswith("Google Gemini")
+    assert llm.provider("https://example.org/v1").startswith("외부 서버")
+
+
+def test_status_and_real_response_test(client):
+    REPLIES[:] = ['{"ops": [], "reply": "안녕하세요"}']
+    r = client.get("/api/llm").json()
+    assert r["status"]["ok"] and r["status"]["has_model"] and r["status"]["provider"].startswith("로컬")
+    t = client.post("/api/llm/test").json()["test"]
+    assert t["ok"] and t["json_ok"] and t["reply"] == "안녕하세요"
+
+
+def test_theory_page_is_served(client):
+    r = client.get("/theory.html")
+    assert r.status_code == 200 and "유한요소해석" in r.text
+    assert 'href="/theory.html"' in client.get("/").text
