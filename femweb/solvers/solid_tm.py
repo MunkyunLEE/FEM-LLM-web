@@ -137,6 +137,8 @@ def solve(model, spec, progress=None):
     res = Result("tensormesh", "static")
     res.nodes = model.nodes.copy()
     res.tris = model.solid_boundary()
+    _e = {(min(a, b), max(a, b)) for t in res.tris.tolist() for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0]))}
+    res.fedges = np.array(sorted(_e), dtype=int).reshape(-1, 2)
     hist = {k: [] for k in ("time", "u.max", "vonMises.max", "energy.total", "reaction.x", "reaction.y", "reaction.z")}
     moving = np.abs(val).sum() > 0
     rsel = (val != 0) if moving else mask

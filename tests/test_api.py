@@ -151,3 +151,12 @@ def test_buckling_reports_critical_load_and_requires_load():
     post_ops([{"op": "clear", "what": "loads"}])
     r = c.post("/api/solve")
     assert r.status_code == 422 and "압축 하중" in r.json()["detail"]
+
+
+@ccx
+def test_result_mesh_has_face_edges_without_quad_diagonals():
+    c.post("/api/examples/shell_panel?preset=1")
+    c.post("/api/solve")
+    m = c.get("/api/result/mesh").json()
+    assert len(m["fedges"]) > 0 and len(m["fedges"]) < len(m["tris"]) * 3
+    assert len(m["fedges"]) == 480

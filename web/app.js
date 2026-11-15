@@ -302,6 +302,14 @@ async function loadResult() {
     const dark = R.mesh.tris.length > 0;
     G.result.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial(dark ? { color: 0x10151c } : { vertexColors: true })));
   }
+  if (R.mesh.fedges && R.mesh.fedges.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(R.mesh.fedges.flat());
+    const ls = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x0b0f14, transparent: true, opacity: 0.55 }));
+    ls.userData.meshLines = true;
+    G.result.add(ls);
+  }
   R.pos = pos;
   R.col = col;
   const frames = st.result.frames;
@@ -378,6 +386,11 @@ function applyVisibility() {
   G.symbols.visible = $('showSymbols').checked;
   $('legend').hidden = !res;
   $('resultbar').hidden = !R.mesh;
+  const ml = $('showMeshLines').checked;
+  G.result.children.forEach((c) => {
+    if (c.userData.meshLines) c.visible = ml;
+  });
+  $('meshLinesWrap').hidden = !R.mesh;
 }
 
 function describeBC(b) {
@@ -919,7 +932,7 @@ function bind() {
   };
   $('cancelSolve').onclick = () => api('/api/cancel/solve', { method: 'POST' }).catch(() => {});
   $('fit').onclick = fit;
-  for (const id of ['showSymbols', 'showEdges', 'showResult']) $(id).onchange = applyVisibility;
+  for (const id of ['showSymbols', 'showEdges', 'showResult', 'showMeshLines']) $(id).onchange = applyVisibility;
   $('frame').oninput = (e) => {
     R.index = +e.target.value;
     showFrame();

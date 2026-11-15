@@ -8,6 +8,7 @@ class Result:
         self.nodes = np.zeros((0, 3))
         self.tris = np.zeros((0, 3), dtype=int)
         self.lines = np.zeros((0, 2), dtype=int)
+        self.fedges = np.zeros((0, 2), dtype=int)
         self.frames = []
         self.history = {}
         self.summary = {}
@@ -46,7 +47,7 @@ class Result:
         }
 
     def mesh(self):
-        return {"nodes": np.round(self.nodes, 6).tolist(), "tris": self.tris.tolist(), "lines": self.lines.tolist()}
+        return {"nodes": np.round(self.nodes, 6).tolist(), "tris": self.tris.tolist(), "lines": self.lines.tolist(), "fedges": self.fedges.tolist()}
 
     def frame(self, i, name):
         f = self.frames[i]

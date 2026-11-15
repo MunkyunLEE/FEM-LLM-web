@@ -373,12 +373,17 @@ def surface(elems):
             else:
                 faces[k] = f
     tris = []
+    fe = set()
     for f in faces.values():
         if f is None:
             continue
         tris.append([f[0], f[1], f[2]])
         if len(f) == 4:
             tris.append([f[0], f[2], f[3]])
+        for k in range(len(f)):
+            a, b = f[k], f[(k + 1) % len(f)]
+            fe.add((a, b) if a < b else (b, a))
+    surface.fedges = sorted(fe)
     return tris, lines
 
 
@@ -445,12 +450,14 @@ def solve(model, base, spec, progress=None):
     frd, dat, out = run_ccx(inp)
     nodes, elems, blocks = parse_frd(frd)
     tris, lines = surface(elems)
+    fedges = surface.fedges
     used = sorted({i for t in tris for i in t} | {i for l in lines for i in l})
     lut = {nid: k for k, nid in enumerate(used)}
     res = Result("calculix", kind)
     res.nodes = np.array([nodes[i] for i in used], dtype=float)
     res.tris = np.array([[lut[i] for i in t] for t in tris], dtype=int).reshape(-1, 3)
     res.lines = np.array([[lut[i] for i in l] for l in lines], dtype=int).reshape(-1, 2)
+    res.fedges = np.array([[lut[a], lut[b]] for a, b in fedges], dtype=int).reshape(-1, 2)
     maxid = max(nodes) + 1
     pos = np.full(maxid + 1, -1, dtype=np.int64)
     pos[np.array(used)] = np.arange(len(used))
