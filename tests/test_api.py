@@ -138,3 +138,16 @@ def test_solve_can_be_cancelled():
     th.join(timeout=30)
     assert out["r"].status_code == 409 and "중단" in out["r"].json()["detail"]
     assert c.post("/api/solve").status_code in (200, 422)
+
+
+@ccx
+def test_buckling_reports_critical_load_and_requires_load():
+    c.post("/api/examples/shell_panel?preset=1")
+    res = c.post("/api/solve").json()["result"]
+    s = res["summary"]
+    assert s["가한 기준 하중 (N)"] == 1000.0
+    assert abs(s["임계 하중 (N) = 계수 × 기준 하중"][0] - 30090.83) < 50
+    c.post("/api/examples/shell_panel?preset=1")
+    post_ops([{"op": "clear", "what": "loads"}])
+    r = c.post("/api/solve")
+    assert r.status_code == 422 and "압축 하중" in r.json()["detail"]

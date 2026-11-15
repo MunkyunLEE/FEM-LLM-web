@@ -417,6 +417,15 @@ def solve(model, base, spec, progress=None):
     notes = []
     perturb = None
     step = {"type": kind}
+    ref_load = 0.0
+    if kind == "buckle":
+        from ..loads import lumped
+
+        F = lumped(model, spec)[0]
+        net = float(np.linalg.norm(F.sum(axis=0)))
+        ref_load = net if net > 1e-9 else float(np.linalg.norm(F, axis=1).sum()) / 2
+        if ref_load <= 1e-9:
+            raise ValueError("좌굴 해석에는 기준이 되는 압축 하중이 필요합니다. 하중(힘 또는 압력)을 먼저 추가하세요")
     if kind == "static" and st.get("nlgeom") and float(st.get("imperfection") or 0) > 0:
         inp, _, _ = build_inp(model, base, spec, step={"type": "buckle", "modes": 1}, out2d=True)
         frd, dat, _ = run_ccx(inp)
@@ -517,7 +526,15 @@ def solve(model, base, spec, progress=None):
     elif kind == "buckle":
         res.history["mode"] = list(range(1, len(factors) + 1))
         res.history["buckling.factor"] = factors
-        res.summary = {"좌굴 계수": [round(f, 5) for f in factors]}
+        res.summary = {
+            "좌굴 계수": [round(f, 5) for f in factors],
+            "가한 기준 하중 (N)": round(ref_load, 4),
+            "임계 하중 (N) = 계수 × 기준 하중": [round(f * ref_load, 2) for f in factors],
+        }
+        if any(f < 0 for f in factors):
+            notes.append("음수 계수는 하중 방향이 반대(인장)일 때 좌굴한다는 뜻입니다. 압축 방향 하중인지 확인하세요")
+        if factors and factors[0] < 1:
+            notes.append("1차 계수가 1보다 작으면 가한 하중이 이미 좌굴 하중보다 큽니다")
     else:
         res.history["mode"] = list(range(1, len(freqs) + 1))
         res.history["frequency"] = freqs
