@@ -133,4 +133,11 @@ def preview(model, spec):
             out["loads"].append({"id": ld["id"], "type": ld["type"], "nodes": ids.tolist(), "vectors": V[ids].round(8).tolist(), "total": (V.sum(axis=0).round(8) + 0.0).tolist(), "desc": describe(ld.get("select"))})
         except Exception as e:
             out["errors"].append(f"{ld['id']}: {e}")
+    from .contact import contacts_of, describe as cdesc, view
+
+    out["contacts"] = view(model, spec)
+    for c, v in zip(contacts_of(spec), out["contacts"]):
+        v["desc"] = cdesc(c)
+        if v.get("error"):
+            out["errors"].append(f"{c['id']}: {v['error']}")
     return out

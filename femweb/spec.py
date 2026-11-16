@@ -26,6 +26,7 @@ def default_spec(model=None):
         "hinge_auto": {"mode": "off", "angle": 5.0},
         "bcs": [],
         "loads": [],
+        "contacts": [],
         "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto"},
         "plots": [],
     }
@@ -71,6 +72,7 @@ def _vec(v, name):
 
 def apply_ops(spec, ops, model=None):
     spec = copy.deepcopy(spec)
+    spec.setdefault("contacts", [])
     log = []
     for op in ops:
         if not isinstance(op, dict) or "op" not in op:
@@ -111,24 +113,77 @@ def apply_ops(spec, ops, model=None):
                 raise ValueError(f"하중 대상 절점이 0개입니다: {item['select']}")
             spec["loads"].append(item)
             log.append(f"하중 추가 {item['id']}")
+        elif k == "add_contact":
+            t = str(op.get("type", "rigid")).lower()
+            item = {"id": _next_id(spec["contacts"], "ct"), "type": t, "friction": _num(op.get("friction") or 0.0, "friction")}
+            if item["friction"] < 0:
+                raise ValueError("마찰계수는 0 이상이어야 합니다")
+            if op.get("stiffness") is not None:
+                item["stiffness"] = _num(op["stiffness"], "stiffness")
+                if item["stiffness"] <= 0:
+                    raise ValueError("접촉 강성은 0보다 커야 합니다")
+            if t == "rigid":
+                shape = str(op.get("shape", "sphere")).lower()
+                if shape not in ("sphere", "plane"):
+                    raise ValueError("강체 형상은 sphere 또는 plane 이어야 합니다")
+                item["shape"] = shape
+                item["motion"] = _vec(op.get("motion", [0, 0, 0]), "motion")
+                if op.get("target"):
+                    item["target"] = op["target"]
+                if shape == "sphere":
+                    item["radius"] = _num(op.get("radius"), "radius")
+                    if item["radius"] <= 0:
+                        raise ValueError("구 반지름은 0보다 커야 합니다")
+                    item["center"] = _vec(op["center"], "center") if op.get("center") is not None else None
+                    if op.get("at") is not None:
+                        item["at"] = _vec(op["at"], "at")
+                else:
+                    item["point"] = _vec(op["point"], "point") if op.get("point") is not None else None
+                    item["normal"] = _vec(op["normal"], "normal") if op.get("normal") is not None else None
+                if item.get("center") is None and item.get("point") is None or shape == "plane" and item.get("normal") is None:
+                    if model is None:
+                        raise ValueError("강체 위치(center 또는 point)를 자동으로 정하려면 모델이 필요합니다")
+                    from .contact import place
+
+                    place(model, spec, item)
+                item.pop("at", None)
+                if model is not None and item.get("target") and len(resolve(model, item["target"])) == 0:
+                    raise ValueError("접촉 대상 절점이 0개입니다")
+            elif t == "pair":
+                if not op.get("a") or not op.get("b"):
+                    raise ValueError("접촉 쌍에는 a, b 두 영역이 필요합니다")
+                item["a"] = op["a"]
+                item["b"] = op["b"]
+                if model is not None:
+                    from .contact import surface
+
+                    for nm in ("a", "b"):
+                        if not surface(model, item[nm]):
+                            raise ValueError(f"접촉 영역 {nm} 안에 요소 면이 없습니다: {item[nm]}")
+            else:
+                raise ValueError("접촉 종류는 rigid 또는 pair 여야 합니다")
+            spec["contacts"].append(item)
+            if t == "rigid" and not any(s2.get("quantity") == "contact.force" for pl in spec["plots"] for s2 in pl.get("series", [])):
+                spec["plots"].append({"id": _next_id(spec["plots"], "pl"), "title": "접촉력-강체 이동량", "x": {"quantity": "contact.disp"}, "series": [{"quantity": "contact.force"}]})
+            log.append(f"접촉 추가 {item['id']}")
         elif k == "remove":
             i = op.get("id")
-            n = len(spec["bcs"]) + len(spec["loads"]) + len(spec["plots"])
-            for key in ("bcs", "loads", "plots"):
+            n = len(spec["bcs"]) + len(spec["loads"]) + len(spec["plots"]) + len(spec["contacts"])
+            for key in ("bcs", "loads", "plots", "contacts"):
                 spec[key] = [x for x in spec[key] if x["id"] != i]
-            if n == len(spec["bcs"]) + len(spec["loads"]) + len(spec["plots"]):
+            if n == len(spec["bcs"]) + len(spec["loads"]) + len(spec["plots"]) + len(spec["contacts"]):
                 raise ValueError(f"id '{i}' 를 찾을 수 없습니다")
             log.append(f"삭제 {i}")
         elif k == "clear":
             what = op.get("what", "all")
-            for key in ("bcs", "loads", "plots"):
+            for key in ("bcs", "loads", "plots", "contacts"):
                 if what in (key, "all"):
                     spec[key] = []
             log.append(f"초기화 {what}")
         elif k == "update":
             i = op.get("id")
             hit = None
-            for key in ("bcs", "loads", "plots"):
+            for key in ("bcs", "loads", "plots", "contacts"):
                 for x in spec[key]:
                     if x["id"] == i:
                         hit = x
@@ -137,8 +192,12 @@ def apply_ops(spec, ops, model=None):
             for f, v in op.items():
                 if f in ("op", "id"):
                     continue
-                if f in ("vector", "direction"):
+                if f in ("vector", "direction", "motion", "center", "point", "normal"):
                     v = _vec(v, f)
+                elif f in ("friction", "radius", "stiffness"):
+                    v = None if v is None else _num(v, f)
+                    if v is not None and (v < 0 or f == "radius" and v <= 0):
+                        raise ValueError(f"{f} 값 범위 오류")
                 elif f == "value":
                     v = _num(v, f)
                 elif f == "dofs":
@@ -276,6 +335,11 @@ def warnings_for(spec, model):
             t.update(d for d in b["dofs"] if d <= 3)
         if t != {1, 2, 3}:
             out.append("병진 자유도 중 구속되지 않은 방향이 있습니다: " + ", ".join("xyz"[d - 1] for d in (1, 2, 3) if d not in t))
+    if spec.get("contacts"):
+        if spec["solver"] == "barhinge":
+            out.append("바-힌지 솔버는 접촉을 지원하지 않습니다 (CalculiX 또는 TensorMesh 를 선택하세요)")
+        if spec["step"]["type"] in ("buckle", "modal"):
+            out.append("접촉은 정적 스텝에서만 적용됩니다")
     st = spec["step"]
     if st.get("control") == "displacement":
         if st["type"] in ("buckle", "modal"):
@@ -283,6 +347,7 @@ def warnings_for(spec, model):
         elif not any(ld["type"] in ("force", "pressure") for ld in spec["loads"]):
             out.append("변위 제어에는 기준이 되는 힘 또는 압력 하중이 필요합니다")
     moving = any(abs(b.get("value", 0.0)) > 0 for b in spec["bcs"])
+    moving = moving or any(c["type"] == "rigid" and any(float(v) != 0 for v in c.get("motion", [])) for c in spec.get("contacts") or [])
     if not spec["loads"] and not moving and spec["step"]["type"] != "modal":
         out.append("하중이나 지정 변위가 없습니다")
     return out

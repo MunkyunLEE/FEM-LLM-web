@@ -24,8 +24,27 @@ def stl_to_solid(data, name="model.stl", size=None, angle=40.0):
         surfs = [s[1] for s in gmsh.model.getEntities(2)]
         if not surfs:
             raise ValueError("STL에서 표면을 찾지 못했습니다")
-        loop = gmsh.model.geo.addSurfaceLoop(surfs)
-        gmsh.model.geo.addVolume([loop])
+        par = {s: s for s in surfs}
+
+        def find(i):
+            while par[i] != i:
+                par[i] = par[par[i]]
+                i = par[i]
+            return i
+
+        owner = {}
+        for sf in surfs:
+            for _, cv in gmsh.model.getBoundary([(2, sf)], oriented=False):
+                if abs(cv) in owner:
+                    par[find(sf)] = find(owner[abs(cv)])
+                else:
+                    owner[abs(cv)] = sf
+        shells = {}
+        for sf in surfs:
+            shells.setdefault(find(sf), []).append(sf)
+        for grp in shells.values():
+            loop = gmsh.model.geo.addSurfaceLoop(grp)
+            gmsh.model.geo.addVolume([loop])
         gmsh.model.geo.synchronize()
         box = gmsh.model.getBoundingBox(-1, -1)
         diag = math.dist(box[:3], box[3:])
@@ -81,6 +100,9 @@ def stl_to_solid(data, name="model.stl", size=None, angle=40.0):
                 "area": round(float(area.sum()), 4),
                 "normal": [round(float(x), 3) for x in nrm] if ln > 0 and planar else None,
             }
+        from .contact import tag_bodies
+
+        tag_bodies(m)
         return m
     finally:
         try:

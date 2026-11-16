@@ -14,6 +14,8 @@ LABELS = {
     "reaction.y": "반력 y (N)",
     "reaction.z": "반력 z (N)",
     "u.max": "최대 변위 (mm)",
+    "contact.disp": "강체 이동량 (mm)",
+    "contact.force": "접촉력 (N)",
     "control.disp": "제어 변위 (mm)",
     "control.force": "제어점 하중 (N)",
     "stability.negative": "음의 고유치 수",

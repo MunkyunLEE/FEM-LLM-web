@@ -121,6 +121,21 @@ def cantilever_solid(L=1000.0, b=50.0, h=100.0):
     stl("cantilever_solid", tris)
 
 
+def two_blocks():
+    def box(lo, hi):
+        x0, y0, z0 = lo
+        x1, y1, z1 = hi
+        c = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0), (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+        quads = [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+        out = []
+        for q in quads:
+            out.append((c[q[0]], c[q[1]], c[q[2]]))
+            out.append((c[q[0]], c[q[2]], c[q[3]]))
+        return out
+
+    stl("two_blocks", box((0, 0, 0), (40, 40, 10)) + box((10, 10, 10), (30, 30, 20)))
+
+
 def cylinder_solid(Ro=50.0, Ri=40.0, L=200.0, n=64):
     tris = []
     for i in range(n):
@@ -216,6 +231,36 @@ PRESETS = {
             {"op": "add_load", "type": "force", "name": "중앙선 하중", "vector": [0, 0, -100], "select": {"plane": {"axis": "x", "at": 150.0}}},
         ],
     },
+    "contact_sphere": {
+        "title": "7a. 패널에 강체 구 압입 (접촉, 마찰)",
+        "file": "shell_panel.obj",
+        "note": "200x200 패널(t=2) 네 변 고정, 반지름 40 강체 구를 중앙에서 3 mm 압입, 마찰 0.2. 선형 판 이론(중앙 집중하중, 고정 지지)으로는 3 mm 처짐에 약 2060 N 이고, 기하비선형을 켜면 막 효과로 더 커집니다",
+        "prompts": ["테두리 고정", "반지름 40 구를 아래로 3 mm 눌러, 마찰 0.2", "해석 실행"],
+        "ops": [
+            {"op": "set_solver", "solver": "calculix"},
+            {"op": "set_section", "group": "*", "thickness": 2.0},
+            {"op": "set_divisions", "divisions": 2},
+            {"op": "add_bc", "type": "fixed", "name": "네 변 고정", "select": {"boundary": True}},
+            {"op": "set_step", "type": "static", "nlgeom": True, "increments": 10},
+            {"op": "add_contact", "type": "rigid", "shape": "sphere", "radius": 40.0, "center": [100.0, 100.0, 41.0], "motion": [0, 0, -3.0], "friction": 0.2},
+        ],
+    },
+    "contact_blocks": {
+        "title": "7b. 블록 두 개 접촉 (변형체-변형체, 마찰)",
+        "file": "two_blocks.stl",
+        "size": 5.0,
+        "note": "아래 블록 40x40x10(바닥 고정) 위에 20x20x10 블록. 윗면을 0.05 mm 누르면서 x로 0.1 mm 밀어 미끄러짐을 만듭니다. 접선력/수직력이 마찰계수 0.3 에 가까워야 합니다",
+        "prompts": ["z 최소 면 고정", "body_2 와 body_1 사이 접촉, 마찰 0.3", "해석 실행"],
+        "ops": [
+            {"op": "set_solver", "solver": "tensormesh"},
+            {"op": "add_bc", "type": "pinned", "name": "바닥 고정", "select": {"plane": {"axis": "z", "at": "min"}}},
+            {"op": "add_bc", "name": "윗면 누름", "dofs": [3], "value": -0.05, "select": {"plane": {"axis": "z", "at": "max"}}},
+            {"op": "add_bc", "name": "윗면 x 이동", "dofs": [1], "value": 0.1, "select": {"plane": {"axis": "z", "at": "max"}}},
+            {"op": "add_bc", "name": "윗면 y 구속", "dofs": [2], "select": {"plane": {"axis": "z", "at": "max"}}},
+            {"op": "set_step", "type": "static", "increments": 4},
+            {"op": "add_contact", "type": "pair", "a": {"group": "body_2"}, "b": {"group": "body_1"}, "friction": 0.3},
+        ],
+    },
     "cantilever_solid": {
         "title": "5a. 캔틸레버 빔 (솔리드 요소)",
         "file": "cantilever_solid.stl",
@@ -250,5 +295,6 @@ if __name__ == "__main__":
     miura()
     cantilever_solid()
     cylinder_solid()
+    two_blocks()
     write("presets.json", json.dumps(PRESETS, ensure_ascii=False, indent=1) + "\n")
     print("ok")

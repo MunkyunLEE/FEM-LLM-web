@@ -118,6 +118,8 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
                     area = 0.5 * np.linalg.norm(np.cross(p[2] - p[0], p[-1] - p[1])) if n == 4 else 0.5 * np.linalg.norm(np.cross(p[1] - p[0], p[2] - p[0]))
                     hinge_w.setdefault(hedge[e], []).append(area / le)
                     break
+    shell_eids = []
+    solid_eids = []
     for (a, b), g in zip(model.beams, model.beam_group):
         eid += 1
         t = model.nodes[b] - model.nodes[a]
@@ -131,6 +133,7 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         ids = list(s) + [mid(s[i], s[(i + 1) % n]) for i in range(n)]
         typ = "S8R" if n == 4 else "S6"
         key = ("SH", g, hinge_of.get(fi))
+        shell_eids.append(eid)
         elsets.setdefault(key, []).append(eid)
         etext.setdefault(typ, []).append(f"{eid}, " + ", ".join(str(i + 1) for i in ids))
     spring_notes = {}
@@ -175,8 +178,14 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         eid += 1
         a, b, c, d = (int(i) for i in t)
         ids = [a, b, c, d, mid(a, b), mid(b, c), mid(a, c), mid(a, d), mid(b, d), mid(c, d)]
+        solid_eids.append(eid)
         elsets.setdefault(("SO", "solid", None), []).append(eid)
         etext.setdefault("C3D10", []).append(f"{eid}, " + ", ".join(str(i + 1) for i in ids))
+    from ..contact import ccx_build
+
+    cx = ccx_build(model, spec, nodes, eid, shell_eids, solid_eids, st["type"] in ("static", "arclength"))
+    if cx:
+        eid = cx["eid"]
     ref = None
     if ctl and ctl["kind"] == "average" and ctl.get("k"):
         hi = np.array(nodes).max(axis=0)
@@ -197,6 +206,8 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
     for typ, rows in etext.items():
         L.append(f"*ELEMENT, TYPE={typ}, ELSET=E{typ}")
         L += rows
+    if cx:
+        L += cx["elements"]
     for key, ids in elsets.items():
         L.append(f"*ELSET, ELSET={names[key]}")
         for i in range(0, len(ids), 12):
@@ -255,6 +266,9 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         notes.append(f"힌지 {', '.join(rigid)}: 강성이 요소 폭 기준 패널 휨강성보다 커서 강접으로 처리했습니다 (분할수를 늘리면 스프링으로 반영됩니다)")
     if pin_names:
         notes.append(f"핀 조인트 {', '.join(pin_names)}: 접힘선 절점을 분리하고 병진 자유도만 묶었습니다 (회전 자유, 절점 쌍 {len(ties)}개)")
+    if cx:
+        L += cx["model"]
+        notes += cx["notes"]
     table = bc_table(model, spec)
     slaves = {b for _, b in ties}
     eq = [(b, a) for a, b in ties]
@@ -326,8 +340,11 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         extra_z = []
         for (a, b), mnode in mids.items():
             for d in (1, 2, 3):
-                if (a, d) in table and (b, d) in table and table[(a, d)] == 0.0 and table[(b, d)] == 0.0:
-                    extra_z.append((mnode, d))
+                if (a, d) in table and (b, d) in table:
+                    if table[(a, d)] == 0.0 and table[(b, d)] == 0.0:
+                        extra_z.append((mnode, d))
+                    else:
+                        moving.append((mnode, d, 0.5 * (table[(a, d)] + table[(b, d)])))
         zero += extra_z
     else:
         for (a, b), mnode in mids.items():
@@ -350,7 +367,7 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         L += ["*STEP", "*BUCKLE", f"{int(st.get('modes', 5))}"]
     elif kind == "modal":
         L += ["*STEP", "*FREQUENCY", f"{int(st.get('modes', 5))}"]
-    elif nl or (moving or ref is not None) and inc > 1 and st.get("nlgeom"):
+    elif nl or (moving or ref is not None) and inc > 1 and st.get("nlgeom") or cx and cx["pairs"]:
         L += ["*STEP, NLGEOM, INC=100000" if st.get("nlgeom") else "*STEP, INC=100000", "*STATIC", f"{1.0 / inc:.6g}, 1., 1e-8, {1.0 / inc:.6g}"]
     else:
         L += ["*STEP", "*STATIC"]
@@ -359,6 +376,8 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         L += [f"{n + 1}, {d}, {d}, {v:.9g}" for n, d, v in moving]
     if ref is not None:
         L += ["*BOUNDARY", f"{ref + 2}, 1, 1, {ctl['amp'] if kind == 'static' else 0.0:.9g}"]
+    if cx and kind == "static":
+        L += cx["step"]
     meta_cload = {}
     if kind != "modal":
         a = assemble(model, spec)
@@ -379,6 +398,8 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         L += [f"*NODE FILE{o2}", "U, RF", "*EL FILE", "S", "*EL PRINT, ELSET=EALL, TOTALS=ONLY", "ELSE"]
         if ref is not None:
             L += ["*NODE PRINT, NSET=NREF", "U", "*NODE PRINT, NSET=NREF2", "RF"]
+        if cx:
+            L += cx["print"]
     L.append("*END STEP")
     meta = {"nodes": np.array(nodes, dtype=float), "bc": sorted({n for n, _, _ in moving}) if moving else sorted({n for n, _ in zero}), "hinge_elems": [e for k, v in elsets.items() if k[0] == "HB" for e in v]}
     cb = next((x for x in spec["bcs"] if x["id"] == "ctl"), None)
@@ -392,6 +413,9 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         meta["ctl"] = sorted(n for n, d, _ in moving if d == d0 and n in cs)
     meta["ref"] = ref
     meta["cload"] = meta_cload
+    meta["contact"] = cx
+    if cx:
+        meta["hinge_elems"] += cx["hide"]
     if ref is not None:
         meta["hinge_elems"].append(ctl_eid)
     return "\n".join(L) + "\n", notes, meta
@@ -755,6 +779,21 @@ def solve(model, base, spec, progress=None):
             res.summary["반력 합 (N)"] = [round(x, 4) for x in reac[-1]]
         if energy:
             res.summary["변형에너지 (N·mm)"] = energy[-1]
+        cx = meta.get("contact")
+        if cx and cx["pairs"]:
+            from ..contact import contacts_of, record as crecord
+
+            cf = {}
+            for c in contacts_of(spec):
+                if c["id"] in cx["refs"]:
+                    tag = cx["pairs"][c["id"]][0].replace("SDEP", "NREF")
+                    v = re.findall(r"total force \(fx,fy,fz\) for set " + tag + r" and time\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)", dat)
+                else:
+                    sd, si = cx["pairs"][c["id"]]
+                    v = re.findall(r"statistics for slave set " + sd + r", master set " + si + r" and time\s+\S+\s+total surface force[^\n]*\n\s+(\S+)\s+(\S+)\s+(\S+)", dat)
+                if len(v) >= len(times):
+                    cf[c["id"]] = [[float(x) for x in r] for r in v[-len(times) :]]
+            crecord(res, spec, times, cf)
         if ctl:
             from ..control import record
 

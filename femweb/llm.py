@@ -79,7 +79,10 @@ OPS:
  {"op":"add_load","type":"pressure","select":SELECT,"value":p,"direction":[dx,dy,dz]}   MPa, direction optional
  {"op":"add_load","type":"gravity","vector":[0,0,-9810]}
  {"op":"update","id":"bc1"|"ld1"|"pl1", ...fields to change}
- {"op":"remove","id":"..."}    {"op":"clear","what":"bcs"|"loads"|"plots"|"all"}
+ {"op":"add_contact","type":"rigid","shape":"sphere","radius":mm,"motion":[dx,dy,dz],"friction":mu,"center":[x,y,z]?}   rigid sphere pushed by motion (mm); omit center to place it touching the model on the side it comes from
+ {"op":"add_contact","type":"rigid","shape":"plane","normal":[nx,ny,nz],"motion":[dx,dy,dz],"friction":mu}   rigid plane; normal points from the plane toward the body ([0,0,1] = floor under the model)
+ {"op":"add_contact","type":"pair","a":<select>,"b":<select>,"friction":mu}   contact between two deformable regions (e.g. {"group":"body_1"})
+ {"op":"remove","id":"..."}    {"op":"clear","what":"bcs"|"loads"|"plots"|"contacts"|"all"}
  {"op":"set_material","name":"default","E":MPa,"nu":..,"rho":tonne/mm3,"yield":MPa|null}
  {"op":"set_section","group":"*"|"<group>","thickness":mm,"beam":{"shape":"rect","b":mm,"h":mm}|{"shape":"circ","r":mm}}
  {"op":"set_hinge","group":"*"|"<hinge group>","kappa":N*mm/rad/mm|null,"ratio":number,"pin":bool}   pin=true is a pin joint (free rotation)
@@ -88,7 +91,7 @@ OPS:
  {"op":"set_solver","solver":"calculix"|"barhinge"|"tensormesh"}
  {"op":"set_divisions","divisions":int}
  {"op":"add_plot","title":str,"x":QUANTITY,"series":[QUANTITY,...]}
-QUANTITY: {"quantity": "time"|"frame"|"energy.total"|"energy.bar"|"energy.bend"|"energy.fold"|"reaction.x"|"reaction.y"|"reaction.z"|"u.max"|"vonMises.max"|"fold.mean"|"buckling.factor"|"frequency"|"control.disp"|"control.force"}
+QUANTITY: {"quantity": "time"|"frame"|"energy.total"|"energy.bar"|"energy.bend"|"energy.fold"|"reaction.x"|"reaction.y"|"reaction.z"|"u.max"|"vonMises.max"|"fold.mean"|"buckling.factor"|"frequency"|"control.disp"|"control.force"|"contact.disp"|"contact.force"}
        or nodal: {"quantity":"u"|"ux"|"uy"|"uz"|"vonMises","select":SELECT,"reduce":"max"|"min"|"mean"|"absmax"}
  "time" means the load factor / pseudo time of the static step.
 
@@ -109,7 +112,7 @@ DEFAULTS = {
 
 
 def context(model, spec, result_meta=None):
-    s = {k: spec[k] for k in ("solver", "divisions", "materials", "sections", "hinges", "bcs", "loads", "step", "plots")}
+    s = {k: spec[k] for k in ("solver", "divisions", "materials", "sections", "hinges", "bcs", "loads", "contacts", "step", "plots") if k in spec}
     out = "MODEL: " + json.dumps(model.summary(), ensure_ascii=False) + "\nSPEC: " + json.dumps(s, ensure_ascii=False)
     if result_meta:
         out += "\nRESULT: " + json.dumps({"kind": result_meta["kind"], "history": result_meta["history"], "fields": result_meta["fields"]}, ensure_ascii=False)

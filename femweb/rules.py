@@ -488,6 +488,7 @@ HELP = (
     "하중: '끝단에 아래로 2 kN', '윗면에 압력 0.5 MPa', 'x 최대 변에 선하중 10 N/mm 아래로', '자중'. "
     "강제변위: 'x 최대 면을 x 방향으로 -5 mm'. 재료·단면: '알루미늄으로', '두께 2 mm', '보 단면 20x40'. "
     "힌지: '쉘 사이 공유 엣지를 핀 조인트로', '힌지 강성 0.05'. 해석: '좌굴 모드 4개', '비선형 증분 30', '해석 실행'. "
+    "접촉: '반지름 20 구를 아래로 3 mm 눌러, 마찰 0.2', '바닥에 강체 평면 접촉', 'body_1 과 body_2 사이 접촉 마찰 0.3', '마찰계수 0.1', '접촉 삭제'. "
     "좌굴 후 거동: '변위제어 5 mm', '초기결함 0.1', '강체 압판으로 변위제어', '하중제어로', '분기 전환 꺼줘'. "
     "그래프: '시간-총에너지 그래프', '하중-변위 곡선'. 수정: 'ld1 2배', 'bc2 삭제', '되돌려'."
 )
@@ -546,6 +547,94 @@ def parse_plot(c, model, spec, ctx):
     return {"op": "add_plot", "title": " · ".join(title) + " 이력", "x": {"quantity": "time"}, "series": series}
 
 
+def parse_contact(c, model, spec):
+    cts = spec.get("contacts") or []
+    idm = c.take(r"(?<![a-z])ct\s*(\d+)(?![a-z0-9])")
+    target = "ct" + idm.group(1) if idm else None
+    if target and not any(x["id"] == target for x in cts):
+        return [], [f"{target} 항목이 없습니다"], [], [], {}
+    if c.take(r"삭제|지워|제거|없애|빼\s*줘|remove|delete|drop|해제"):
+        c.takeall(r"접촉|contacts?|조건|모두|전부|전체|모든|all|강체|구(?![가-힣])|평면")
+        if target:
+            return [{"op": "remove", "id": target}], [], [], c.leftover(), {}
+        if not cts:
+            return [], ["삭제할 접촉이 없습니다"], [], [], {}
+        return [{"op": "clear", "what": "contacts"}], [], [], c.leftover(), {}
+    mu = None
+    if c.take(r"마찰\s*(?:이|은|는)?\s*없(?:이|는|음|게)|무마찰|frictionless|no friction|without friction"):
+        mu = 0.0
+    else:
+        m = c.take(r"(?:마찰\s*계수|마찰|friction(?:\s*coefficient)?|(?<![a-z])mu(?![a-z])|μ)\s*(?:는|은|=|를|을|이|가|:)?\s*" + NUM)
+        if m:
+            mu = _f(m)
+    rad = None
+    m = c.take(r"(?:반지름|반경|radius|(?<![a-z])r)\s*(?:=|이|가|은|는|:)?\s*" + NUM + r"\s*(mm|cm|m)?(?![a-z])")
+    if m:
+        rad = _f(m) * {"mm": 1.0, "cm": 10.0, "m": 1000.0, None: 1.0}[m.group(2)]
+    else:
+        m = c.take(r"(?:지름|직경|diameter|(?<![a-z])d|φ|ø)\s*(?:=|이|가|은|는|:)?\s*" + NUM + r"\s*(mm|cm|m)?(?![a-z])")
+        if m:
+            rad = 0.5 * _f(m) * {"mm": 1.0, "cm": 10.0, "m": 1000.0, None: 1.0}[m.group(2)]
+    cen = None
+    m = c.take(r"(?:중심|center|centre)\s*(?:은|는|이|가|을|를|=|:|at)?\s*\(?\s*" + NUM + r"\s*[, ]\s*" + NUM + r"\s*[, ]\s*" + NUM + r"\s*\)?")
+    if m:
+        cen = [float(m.group(1)), float(m.group(2)), float(m.group(3))]
+    sphere = c.take(r"강체\s*구|구체|(?<![가-힣])구(?=를|로|가|\s|$)|sphere|(?<![a-z])ball(?![a-z])|인덴터|indenter") is not None
+    floor = c.take(r"바닥|지면|floor|ground") is not None
+    plane = c.take(r"강체\s*(?:평면|판|벽|면)|평면|(?<![a-z])plane(?![a-z])|rigid\s*(?:plate|wall|surface)|압판|platen") is not None or floor
+    pair_word = c.take(r"두\s*(?:물체|바디|몸체|부품|파트)|물체\s*(?:사이|끼리|간)|서로|between|each other|사이") is not None
+    names = model.group_names() if model is not None else []
+    found = []
+    for g in sorted(names, key=len, reverse=True):
+        if c.take(r"(?<![a-z0-9_])" + re.escape(g.lower()) + r"(?![a-z0-9_])"):
+            found.append(g)
+    if not (sphere or plane or pair_word or len(found) >= 2 or rad is not None):
+        if mu is not None:
+            c.takeall(r"접촉|contact|으로|로|바꿔|변경|수정|설정|적용")
+            if target:
+                return [{"op": "update", "id": target, "friction": mu}], [], [], c.leftover(), {}
+            return [{"op": "_friction", "friction": mu}], [], [], c.leftover(), {}
+        if target or c.has(r"접촉|contact"):
+            return [], ["어떤 접촉인지 알려주세요 (예: 반지름 20 구를 아래로 3 mm 눌러 / 바닥에 강체 평면 접촉 / body_1 과 body_2 사이 접촉, 마찰 0.3)"], [], [], {}
+        return None
+    c.takeall(r"접촉|(?<![a-z])contacts?(?![a-z])|강체|rigid|조건|추가|정의|설정|걸어|넣어|만들어|add|define|with")
+    if sphere or rad is not None and not plane:
+        if rad is None:
+            return [], ["구의 반지름을 알려주세요 (예: 반지름 20 구를 아래로 3 mm 눌러)"], [], [], {}
+        d = direction(c, model) or loose_axis(c)
+        m = c.take(NUM + r"\s*(mm|cm|m)(?![a-z])\s*(?:만큼|까지|씩)?")
+        dist = abs(_f(m)) * {"mm": 1.0, "cm": 10.0, "m": 1000.0}[m.group(2)] if m else 0.0
+        c.takeall(r"눌러|누르|압입|밀어|내려|이동|움직|찍어|press|push|indent|move|위에서|위에|by|into")
+        v = d["vec"] if d else [0.0, 0.0, -1.0]
+        op = {"op": "add_contact", "type": "rigid", "shape": "sphere", "radius": rad, "motion": [x * dist + 0.0 for x in v], "friction": mu or 0.0}
+        if cen:
+            op["center"] = cen
+        notes = [] if dist > 0 else ["이동량이 없어 구가 제자리에 있습니다. '아래로 3 mm 눌러'처럼 이동량을 주면 압입합니다"]
+        return [op], [], notes, c.leftover(), {}
+    if plane:
+        d = direction(c, model) or loose_axis(c)
+        m = c.take(NUM + r"\s*(mm|cm|m)(?![a-z])\s*(?:만큼|까지|씩)?")
+        dist = abs(_f(m)) * {"mm": 1.0, "cm": 10.0, "m": 1000.0}[m.group(2)] if m else 0.0
+        c.takeall(r"눌러|누르|압입|밀어|내려|올려|이동|움직|press|push|move|위에서|위에|아래에|밑에|에|by|into")
+        if d:
+            v = d["vec"]
+        elif floor:
+            v = [0.0, 0.0, 1.0]
+        else:
+            v = [0.0, 0.0, -1.0]
+        op = {"op": "add_contact", "type": "rigid", "shape": "plane", "normal": v, "motion": [x * dist + 0.0 for x in v], "friction": mu or 0.0}
+        return [op], [], [], c.leftover(), {}
+    bodies = [g for g in names if g.startswith("body_")]
+    if len(found) >= 2:
+        a, b = found[0], found[1]
+        pos = {g: c.w.find(g.lower()) for g in found}
+    elif len(bodies) == 2 and not found:
+        a, b = bodies[1], bodies[0]
+    else:
+        return [], ["접촉시킬 두 그룹을 알려주세요. 사용 가능: " + (", ".join(names) or "없음")], [], [], {}
+    return [{"op": "add_contact", "type": "pair", "a": {"group": a}, "b": {"group": b}, "friction": mu or 0.0}], [], [], c.leftover(), {}
+
+
 def parse_clause(text, model, spec, ctx):
     c = Clause(text)
     ops = []
@@ -564,6 +653,10 @@ def parse_clause(text, model, spec, ctx):
         return [], ["어떤 값을 그릴지 알려주세요 (에너지, 반력, 변위, 응력, 접힘각, 하중-변위, 좌굴 계수, 고유진동수)"], [], [], {}
     if re.search(r"되돌려|되돌리|실행\s*취소|방금\s*(?:거|것|한\s*거)?\s*(?:취소|삭제|지워)|이전\s*(?:상태)?로|(?<![a-z])undo(?![a-z])|revert", t):
         return [], [], [], [], {"undo": True}
+    if re.search(r"접촉|마찰|(?<![a-z])contact|friction|강체|압입|인덴터|indent|rigid|(?<![가-힣])구(?:를|로|가|\s)|sphere|(?<![a-z])ball(?![a-z])", t) and not re.search(r"구속|구간|구조|변위\s*제어|displacement\s*-?\s*control", t.replace("구를", "").replace("구로", "")) or re.search(r"(?<![a-z])ct\s*\d+(?![a-z0-9])", t):
+        r = parse_contact(c, model, spec)
+        if r is not None:
+            return r
     ctl_load = None
     if re.search(r"변위\s*제어|displacement\s*-?\s*control", t):
         m = c.take(r"(?<![a-z])ld\s*(\d+)(?![a-z0-9])\s*(?:을|를|으로|로)?\s*(?:기준(?:으로)?)?")
@@ -1167,7 +1260,15 @@ def describe_op(o):
     if k == "remove":
         return f"{o['id']} 삭제"
     if k == "clear":
-        return {"bcs": "구속 전체 삭제", "loads": "하중 전체 삭제", "plots": "그래프 전체 삭제", "all": "조건 전체 삭제"}[o.get("what", "all")]
+        return {"bcs": "구속 전체 삭제", "loads": "하중 전체 삭제", "plots": "그래프 전체 삭제", "contacts": "접촉 전체 삭제", "all": "조건 전체 삭제"}[o.get("what", "all")]
+    if k == "add_contact":
+        mu = f", 마찰 {o.get('friction', 0):g}"
+        if o.get("type") == "pair":
+            return f"접촉 쌍 추가: {o['a'].get('group', '영역 a')} ↔ {o['b'].get('group', '영역 b')}{mu}"
+        mv = ", 이동 [" + ", ".join(f"{v:g}" for v in o.get("motion", [0, 0, 0])) + "] mm"
+        if o.get("shape") == "sphere":
+            return f"강체 구 접촉 추가: 반지름 {o['radius']:g} mm{mv}{mu}"
+        return f"강체 평면 접촉 추가: 법선 [" + ", ".join(f"{v:g}" for v in o.get("normal", [0, 0, 1])) + f"]{mv}{mu}"
     if k == "update":
         return f"{o['id']} 수정: " + ", ".join(f"{a}={fmt_vec(b) if isinstance(b, list) else b}" for a, b in o.items() if a not in ("op", "id"))
     if k == "set_material":
@@ -1269,6 +1370,19 @@ def parse(text, model, spec):
         if u:
             unknown.append(cl if not o else f"{cl} (남은 말: {' '.join(u)})")
         flags.update(f)
+    fixed = []
+    for o in ops:
+        if o.get("op") != "_friction":
+            fixed.append(o)
+            continue
+        prev = [x for x in fixed if x.get("op") == "add_contact"]
+        if prev:
+            prev[-1]["friction"] = o["friction"]
+        elif spec.get("contacts"):
+            fixed += [{"op": "update", "id": x["id"], "friction": o["friction"]} for x in spec["contacts"]]
+        else:
+            ask.append("마찰계수를 적용할 접촉이 없습니다. 먼저 접촉을 추가하세요 (예: 반지름 20 구를 아래로 3 mm 눌러, 마찰 0.2)")
+    ops = fixed
     parts = []
     if ops:
         parts.append(" / ".join(describe_op(o) for o in ops))

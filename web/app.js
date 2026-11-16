@@ -52,7 +52,7 @@ controls.dampingFactor = 0.12;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.15));
 const sun = new THREE.DirectionalLight(0xffffff, 1.4);
 scene.add(sun);
-const G = { model: new THREE.Group(), edges: new THREE.Group(), symbols: new THREE.Group(), result: new THREE.Group(), pick: new THREE.Group() };
+const G = { model: new THREE.Group(), edges: new THREE.Group(), symbols: new THREE.Group(), result: new THREE.Group(), pick: new THREE.Group(), rigid: new THREE.Group() };
 Object.values(G).forEach((g) => scene.add(g));
 let diag = 100;
 let center = new THREE.Vector3();
@@ -192,11 +192,63 @@ function sample(n, max) {
   return out;
 }
 
+function placeRigid(t) {
+  for (const o of G.rigid.children) {
+    const b = o.userData.base;
+    const m = o.userData.motion;
+    if (b) o.position.set(b[0] + t * m[0], b[1] + t * m[1], b[2] + t * m[2]);
+  }
+}
+
+function buildRigid() {
+  clear(G.rigid);
+  if (!st || !st.preview || !st.preview.contacts) return;
+  for (const c of st.preview.contacts) {
+    if (c.type !== 'rigid') continue;
+    const hot = c.id === highlightId;
+    const mat = new THREE.MeshBasicMaterial({ color: hot ? 0xffc857 : 0x9aa7b8, wireframe: true, transparent: true, opacity: 0.55 });
+    let o;
+    if (c.shape === 'sphere') {
+      o = new THREE.Mesh(new THREE.SphereGeometry(c.radius, 28, 18), mat);
+      o.userData.base = c.center;
+    } else {
+      o = new THREE.Mesh(new THREE.PlaneGeometry(2 * c.size, 2 * c.size, 12, 12), mat);
+      o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...c.normal).normalize());
+      const cen = [0, 1, 2].map((k) => (st.view.nodes.reduce((a, p) => Math.min(a, p[k]), Infinity) + st.view.nodes.reduce((a, p) => Math.max(a, p[k]), -Infinity)) / 2);
+      const n = new THREE.Vector3(...c.normal).normalize();
+      const d = new THREE.Vector3(c.point[0] - cen[0], c.point[1] - cen[1], c.point[2] - cen[2]).dot(n);
+      o.userData.base = [cen[0] + d * n.x, cen[1] + d * n.y, cen[2] + d * n.z];
+    }
+    o.userData.motion = c.motion;
+    G.rigid.add(o);
+    const mv = new THREE.Vector3(...c.motion);
+    if (mv.length() > 0) {
+      const len = Math.max(mv.length(), diag * 0.08);
+      const a = new THREE.ArrowHelper(mv.clone().normalize(), new THREE.Vector3(0, 0, 0), len, 0x6ee7b7, diag * 0.03, diag * 0.015);
+      a.userData.base = o.userData.base;
+      a.userData.motion = c.motion;
+      G.rigid.add(a);
+    }
+  }
+  placeRigid(0);
+}
+
 function buildSymbols() {
   clear(G.symbols);
+  buildRigid();
   if (!st || !st.view || !st.preview) return;
   const nodes = st.view.nodes;
   const s = diag * 0.035;
+  for (const c of st.preview.contacts || []) {
+    if (c.type !== 'pair' || !c.a) continue;
+    for (const [ids, col] of [[c.a, 0x6ee7b7], [c.b, 0xf0a35e]]) {
+      const pg = new THREE.BufferGeometry();
+      const arr = [];
+      for (const k of sample(ids.length, 1500)) arr.push(...nodes[ids[k]]);
+      pg.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+      G.symbols.add(new THREE.Points(pg, new THREE.PointsMaterial({ color: c.id === highlightId ? 0xffc857 : col, size: 4, sizeAttenuation: false, depthTest: false })));
+    }
+  }
   const AX = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
   for (const bc of st.preview.bcs) {
     const hot = bc.id === highlightId;
@@ -364,6 +416,7 @@ async function showFrame() {
     if (o.isMesh) o.geometry.computeVertexNormals();
     o.geometry.computeBoundingSphere();
   }
+  placeRigid(st.result.kind === 'static' && $('showResult').checked ? R.scale * f.time : 0);
   $('frameLabel').textContent = `${R.index + 1}/${st.result.frames.length} · ${f.label}`;
   $('legend').hidden = !$('showResult').checked;
   $('legendTitle').textContent = R.field;
@@ -384,6 +437,8 @@ function applyVisibility() {
   G.model.visible = !res;
   G.edges.visible = $('showEdges').checked && !res;
   G.symbols.visible = $('showSymbols').checked;
+  G.rigid.visible = $('showSymbols').checked;
+  if (!res) placeRigid(0);
   $('legend').hidden = !res;
   $('resultbar').hidden = !R.mesh;
   const ml = $('showMeshLines').checked;
@@ -495,6 +550,55 @@ function renderLists() {
       buildSymbols();
     };
     ll.append(it);
+  }
+  const cl = $('ctList');
+  cl.innerHTML = '';
+  const cts = st.spec.contacts || [];
+  $('ctCount').textContent = cts.length ? `${cts.length}개` : '';
+  if (!cts.length) cl.append(el('div', 'empty', '없음'));
+  for (const c of cts) {
+    const p = (pv.contacts || []).find((x) => x.id === c.id);
+    const it = el('div', 'item' + (highlightId === c.id ? ' sel' : ''));
+    const top = el('div', 'top');
+    const nm = el('span');
+    nm.append(el('span', 'id', c.id), document.createTextNode(c.type === 'rigid' ? (c.shape === 'sphere' ? '강체 구' : '강체 평면') : '접촉 쌍'));
+    const x = el('button', 'x', '✕');
+    x.onclick = (e) => {
+      e.stopPropagation();
+      ops([{ op: 'remove', id: c.id }]);
+    };
+    top.append(nm, x);
+    it.append(top, el('div', 'desc', p && p.desc ? p.desc : ''));
+    const ed = el('div', 'edit');
+    const mu = el('input');
+    mu.type = 'number';
+    mu.step = 'any';
+    mu.min = 0;
+    mu.value = c.friction || 0;
+    mu.title = '마찰계수';
+    mu.onclick = (e) => e.stopPropagation();
+    mu.onchange = () => ops([{ op: 'update', id: c.id, friction: Math.max(0, +mu.value || 0) }]);
+    ed.append(mu);
+    if (c.type === 'rigid') {
+      const ins = c.motion.map((v) => {
+        const i = el('input');
+        i.type = 'number';
+        i.step = 'any';
+        i.value = v;
+        i.title = '강체 이동량 (mm)';
+        i.onclick = (e) => e.stopPropagation();
+        return i;
+      });
+      ins.forEach((i) => (i.onchange = () => ops([{ op: 'update', id: c.id, motion: ins.map((q) => +q.value || 0) }])));
+      ed.append(...ins);
+    }
+    it.append(ed);
+    it.onclick = () => {
+      highlightId = highlightId === c.id ? null : c.id;
+      renderLists();
+      buildSymbols();
+    };
+    cl.append(it);
   }
   const w = $('warnings');
   w.innerHTML = '';

@@ -110,6 +110,12 @@ def solve(model, spec, progress=None):
         pre_notes += ctl["notes"]
         if not st.get("nlgeom"):
             pre_notes.append("기하비선형이 꺼져 있어 좌굴 이후 거동은 나오지 않습니다 (선형 변위 제어)")
+    from ..contact import contacts_of
+
+    has_contact = bool(contacts_of(spec))
+    if has_contact and not st.get("nlgeom"):
+        st["nlgeom"] = True
+        pre_notes.append("접촉이 있어 비선형(Neo-Hookean) 경로로 풀었습니다")
     imp = float(st.get("imperfection") or 0)
     if st.get("nlgeom") and imp > 0:
         from . import calculix
@@ -184,8 +190,19 @@ def solve(model, spec, progress=None):
         cvec = fcn / ctl["N"]
 
     lamc = [0.0]
+    tmc = None
+    cfh = {}
+    if has_contact:
+        from ..contact import TMContact
+
+        tmc = TMContact(model, spec, pts, mids, torch, dt)
+        notes += tmc.notes
 
     def record(lam, U, energy, reac, finite):
+        if tmc is not None:
+            for cid, v in tmc.forces(U, lam).items():
+                cfh.setdefault(cid, []).append(v)
+            tmc.commit(U, lam)
         fields = {k: v[:n0] for k, v in stress_fields(corner_gradients(pts, t10, U), E, nu, finite).items()}
         res.add_frame(f"하중계수 {lam:.4g}", lam, U[:n0], fields)
         hist["time"].append(float(lam))
@@ -222,16 +239,25 @@ def solve(model, spec, progress=None):
 
         model_nh = NeoHookeanModel.from_mesh(mesh, E=E, nu=nu)
         free = np.where(~mask)[0]
-        pre = splu(K.to_scipy_coo().tocsr()[free][:, free].tocsc())
+        Kff = K.to_scipy_coo().tocsr()[free][:, free].tocsc()
+        if tmc is not None:
+            from scipy.sparse import identity
+
+            Kff = Kff + identity(len(free), format="csc") * (1e-7 * float(Kff.diagonal().mean()))
+        pre = splu(Kff)
         M = LinearOperator((len(free), len(free)), matvec=pre.solve)
         ft = torch.tensor(free)
         u = torch.zeros(n * 3, dtype=dt)
         inc = max(1, int(st.get("increments", 25)))
         fnorm = max(float(np.linalg.norm(F)), 1e-12)
 
+        cur = [0.0]
+
         def grad(uv, graph=False):
             x = uv.reshape(n, 3).clone().requires_grad_(True)
             en = model_nh.energy(x)
+            if tmc is not None:
+                en = en + tmc.energy(x, cur[0])
             (g,) = torch.autograd.grad(en, x, create_graph=graph)
             return en, g, x
 
@@ -243,6 +269,7 @@ def solve(model, spec, progress=None):
         fcn_free = fc[ft].numpy() if fc is not None else None
         while lam_done < 1 - 1e-12:
             lam = min(1.0, lam_done + step)
+            cur[0] = lam
             trial = u.clone()
             trial[torch.tensor(np.where(mask)[0])] = torch.tensor(lam * val[mask], dtype=dt)
             ok = False
@@ -319,6 +346,10 @@ def solve(model, spec, progress=None):
         "반력 합 (N)": [round(hist[f"reaction.{c}"][-1], 4) for c in "xyz"],
         "프레임 수": len(res.frames),
     }
+    if tmc is not None:
+        from ..contact import record as crecord
+
+        crecord(res, spec, hist["time"], cfh)
     if ctl:
         ctl_record(res, ctl, None, cforce, cdisp)
     if notes:

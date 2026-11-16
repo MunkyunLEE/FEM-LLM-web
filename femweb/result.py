@@ -13,6 +13,7 @@ class Result:
         self.history = {}
         self.summary = {}
         self.log = ""
+        self.rigid = []
 
     def add_frame(self, label, time, U, fields=None):
         self.frames.append({"label": label, "time": float(time), "U": np.asarray(U, dtype=float), "fields": {k: np.asarray(v, dtype=float) for k, v in (fields or {}).items()}})
@@ -47,7 +48,7 @@ class Result:
         }
 
     def mesh(self):
-        return {"nodes": np.round(self.nodes, 6).tolist(), "tris": self.tris.tolist(), "lines": self.lines.tolist(), "fedges": self.fedges.tolist()}
+        return {"nodes": np.round(self.nodes, 6).tolist(), "tris": self.tris.tolist(), "lines": self.lines.tolist(), "fedges": self.fedges.tolist(), "rigid": getattr(self, "rigid", [])}
 
     def frame(self, i, name):
         f = self.frames[i]
