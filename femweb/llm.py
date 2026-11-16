@@ -84,11 +84,11 @@ OPS:
  {"op":"set_section","group":"*"|"<group>","thickness":mm,"beam":{"shape":"rect","b":mm,"h":mm}|{"shape":"circ","r":mm}}
  {"op":"set_hinge","group":"*"|"<hinge group>","kappa":N*mm/rad/mm|null,"ratio":number,"pin":bool}   pin=true is a pin joint (free rotation)
  {"op":"auto_hinge","mode":"auto"|"groups"|"crease"|"all"|"off","angle":deg}   turn shell-to-shell shared edges into hinges (auto = group boundaries + creases)
- {"op":"set_step","type":"static"|"buckle"|"modal"|"arclength","nlgeom":bool,"increments":int,"modes":int,"imperfection":mm}
+ {"op":"set_step","type":"static"|"buckle"|"modal"|"arclength","nlgeom":bool,"increments":int,"modes":int,"imperfection":mm,"control":"load"|"displacement","control_disp":mm,"control_load":"ld1","control_kind":"average"|"rigid","branch":"auto"|"primary"}   control=displacement follows post-buckling/snap-through by controlling the displacement under the chosen load (average keeps the load distribution, rigid pushes the loaded nodes equally); imperfection adds the first buckling mode as initial shape error
  {"op":"set_solver","solver":"calculix"|"barhinge"|"tensormesh"}
  {"op":"set_divisions","divisions":int}
  {"op":"add_plot","title":str,"x":QUANTITY,"series":[QUANTITY,...]}
-QUANTITY: {"quantity": "time"|"frame"|"energy.total"|"energy.bar"|"energy.bend"|"energy.fold"|"reaction.x"|"reaction.y"|"reaction.z"|"u.max"|"vonMises.max"|"fold.mean"|"buckling.factor"|"frequency"}
+QUANTITY: {"quantity": "time"|"frame"|"energy.total"|"energy.bar"|"energy.bend"|"energy.fold"|"reaction.x"|"reaction.y"|"reaction.z"|"u.max"|"vonMises.max"|"fold.mean"|"buckling.factor"|"frequency"|"control.disp"|"control.force"}
        or nodal: {"quantity":"u"|"ux"|"uy"|"uz"|"vonMises","select":SELECT,"reduce":"max"|"min"|"mean"|"absmax"}
  "time" means the load factor / pseudo time of the static step.
 

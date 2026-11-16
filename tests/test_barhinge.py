@@ -29,7 +29,7 @@ def test_snap_through_arclength():
     free = np.array([5])
     F0 = np.zeros((3, 3))
     F0[1, 2] = -1.0
-    frames, msgs = run_arclength(tr, free, F0, 60, 0.05)
+    frames, msgs, _ = run_arclength(tr, free, F0, 60, 0.05)
     L0 = np.hypot(b, h)
     lam = np.array([f[0] for f in frames])
     z = np.array([f[1][1, 2] for f in frames])

@@ -24,6 +24,8 @@
       <div class="row"><select id="solver"><option value="calculix">CalculiX (바·쉘 FEM)</option><option value="barhinge">바-힌지 (간이 검토)</option><option value="tensormesh">TensorMesh (솔리드)</option></select></div>
       <div class="row two"><label>해석 종류<select id="stepType"><option value="static">정적</option><option value="buckle">좌굴</option><option value="modal">모달</option><option value="arclength">호장법</option></select></label><label class="check"><input type="checkbox" id="nlgeom">기하비선형</label></div>
       <div class="row three"><label>증분<input id="increments" type="number" min="1" value="25"></label><label>모드 수<input id="modes" type="number" min="1" value="5"></label><label>초기결함<input id="imperfection" type="number" step="any" value="0"></label></div>
+      <div class="row two"><label>제어 방식<select id="control"><option value="load">하중 제어</option><option value="displacement">변위 제어</option></select></label><label>목표 변위 (mm)<input id="controlDisp" type="number" step="any" min="0" value="0" title="0이면 모델 크기의 5%"></label></div>
+      <div class="row two"><label>변위 제어 방법<select id="controlKind"><option value="average">하중 분포 유지</option><option value="rigid">강체 압판</option></select></label><label class="check" title="바-힌지: 완전한 형상에서 분기점을 만나면 좌굴 가지로 전환"><input type="checkbox" id="branch">분기 전환</label></div>
     </section>
     <section>
       <h2>재료 · 단면 <small>mm · N · MPa</small></h2>

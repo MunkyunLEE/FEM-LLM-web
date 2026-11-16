@@ -525,6 +525,14 @@ function renderControls() {
   $('increments').value = s.step.increments;
   $('modes').value = s.step.modes;
   $('imperfection').value = s.step.imperfection || 0;
+  $('control').value = s.step.control || 'load';
+  $('controlDisp').value = s.step.control_disp || 0;
+  $('controlKind').value = s.step.control_kind || 'average';
+  $('branch').checked = (s.step.branch || 'auto') !== 'primary';
+  const dc = s.step.control === 'displacement' && (s.step.type === 'static' || s.step.type === 'arclength');
+  $('controlDisp').disabled = !dc;
+  $('controlKind').disabled = !dc;
+  $('branch').disabled = s.solver !== 'barhinge';
   const m = s.materials.default;
   $('matE').value = m.E;
   $('matNu').value = m.nu;
@@ -916,6 +924,10 @@ function bind() {
   $('increments').onchange = (e) => ops([{ op: 'set_step', increments: +e.target.value || 1 }]);
   $('modes').onchange = (e) => ops([{ op: 'set_step', modes: +e.target.value || 1 }]);
   $('imperfection').onchange = (e) => ops([{ op: 'set_step', imperfection: +e.target.value || 0 }]);
+  $('control').onchange = (e) => ops([{ op: 'set_step', control: e.target.value }]);
+  $('controlDisp').onchange = (e) => ops([{ op: 'set_step', control: 'displacement', control_disp: Math.abs(+e.target.value) || 0 }]);
+  $('controlKind').onchange = (e) => ops([{ op: 'set_step', control_kind: e.target.value }]);
+  $('branch').onchange = (e) => ops([{ op: 'set_step', branch: e.target.checked ? 'auto' : 'primary' }]);
   $('matE').onchange = (e) => ops([{ op: 'set_material', name: 'default', E: +e.target.value }]);
   $('matNu').onchange = (e) => ops([{ op: 'set_material', name: 'default', nu: +e.target.value }]);
   $('matY').onchange = (e) => ops([{ op: 'set_material', name: 'default', yield: e.target.value === '' ? null : +e.target.value }]);

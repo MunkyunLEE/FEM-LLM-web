@@ -59,7 +59,7 @@ def _beam_dir(t):
     return tuple(np.round(n1, 3))
 
 
-def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
+def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None):
     from ..hinges import split_pins
 
     st = dict(spec["step"])
@@ -177,9 +177,20 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
         ids = [a, b, c, d, mid(a, b), mid(b, c), mid(a, c), mid(a, d), mid(b, d), mid(c, d)]
         elsets.setdefault(("SO", "solid", None), []).append(eid)
         etext.setdefault("C3D10", []).append(f"{eid}, " + ", ".join(str(i + 1) for i in ids))
+    ref = None
+    if ctl and ctl["kind"] == "average" and ctl.get("k"):
+        hi = np.array(nodes).max(axis=0)
+        far = hi + 0.1 * (hi - np.array(nodes).min(axis=0)) + 1.0
+        nodes.append(far)
+        nodes.append(far + np.array([1.0, 0.0, 0.0]))
+        ref = len(nodes) - 2
+        eid += 1
+        ctl_eid = eid
     L.append("*NODE, NSET=NALL")
     for i, p in enumerate(nodes):
         L.append(f"{i + 1}, {p[0]:.9g}, {p[1]:.9g}, {p[2]:.9g}")
+    if ref is not None:
+        L += ["*NSET, NSET=NREF", f"{ref + 1}", "*NSET, NSET=NREF2", f"{ref + 2}", "*ELEMENT, TYPE=T3D2, ELSET=ECTL", f"{ctl_eid}, {ref + 1}, {ref + 2}"]
     names = {}
     for k, key in enumerate(elsets):
         names[key] = f"ES{k + 1}"
@@ -197,6 +208,8 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
         g = key[1] if key[0] != "SO" else "*"
         name = section_for(spec, g).get("material", "default")
         mats[name] = spec["materials"].get(name, spec["materials"]["default"])
+    if ref is not None:
+        L += ["*MATERIAL, NAME=MCTL", "*ELASTIC", f"{ctl['k']:.9g}, 0.", "*DENSITY", "1e-20", "*SOLID SECTION, ELSET=ECTL, MATERIAL=MCTL", "1."]
     plastic = False
     hmats = sorted({section_for(spec, key[1]).get("material", "default") for key in elsets if key[0] == "HB"})
     for name in hmats:
@@ -259,46 +272,8 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
         for b, a in eq:
             for d in (1, 2, 3):
                 L += ["2", f"{b + 1}, {d}, 1., {a + 1}, {d}, -1."]
-    solid_only = len(model.solids) > 0 and not model.beams and not model.shells
-    zero = [(n, d) for (n, d), v in table.items() if v == 0.0 and not (solid_only and d > 3)]
-    moving = [(n, d, v) for (n, d), v in table.items() if v != 0.0 and not (solid_only and d > 3)]
-    if model.solids is not None and len(model.solids):
-        extra_z = []
-        for (a, b), mnode in mids.items():
-            for d in (1, 2, 3):
-                if (a, d) in table and (b, d) in table and table[(a, d)] == 0.0 and table[(b, d)] == 0.0:
-                    extra_z.append((mnode, d))
-        zero += extra_z
-    else:
-        for (a, b), mnode in mids.items():
-            for d in range(1, 7):
-                if (a, d) in table and (b, d) in table:
-                    va, vb = table[(a, d)], table[(b, d)]
-                    if mnode in slaves and d <= 3:
-                        continue
-                    if va == 0.0 and vb == 0.0:
-                        zero.append((mnode, d))
-                    else:
-                        moving.append((mnode, d, 0.5 * (va + vb)))
-    if zero:
-        L.append("*BOUNDARY")
-        L += [f"{n + 1}, {d}, {d}, 0." for n, d in zero]
-    kind = st["type"]
-    nl = bool(st.get("nlgeom")) or plastic
-    inc = max(1, int(st.get("increments", 25)))
-    if kind == "buckle":
-        L += ["*STEP", "*BUCKLE", f"{int(st.get('modes', 5))}"]
-    elif kind == "modal":
-        L += ["*STEP", "*FREQUENCY", f"{int(st.get('modes', 5))}"]
-    elif nl or moving and inc > 1 and st.get("nlgeom"):
-        L += ["*STEP, NLGEOM, INC=100000" if st.get("nlgeom") else "*STEP, INC=100000", "*STATIC", f"{1.0 / inc:.6g}, 1., 1e-8, {1.0 / inc:.6g}"]
-    else:
-        L += ["*STEP", "*STATIC"]
-    if moving and kind != "modal":
-        L.append("*BOUNDARY")
-        L += [f"{n + 1}, {d}, {d}, {v:.9g}" for n, d, v in moving]
-    if kind != "modal":
-        a = assemble(model, spec)
+
+    def nodal(a):
         F = {}
 
         def add(n, v, off=0):
@@ -332,6 +307,63 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
         for (n, d) in list(F):
             if n in slaves and d <= 3:
                 F[(master_of[n], d)] = F.get((master_of[n], d), 0.0) + F.pop((n, d))
+        return F
+
+    if ref is not None:
+        Fc = {k: v / ctl["N"] for k, v in nodal(assemble(model, ctl["one"])).items() if k not in table and k[1] <= 3}
+        if not Fc:
+            raise ValueError("변위 제어 하중이 걸린 자유도가 모두 구속되어 있습니다")
+        dep = max(Fc, key=lambda k: abs(Fc[k]))
+        terms = [(dep[0], dep[1], Fc[dep])] + [(n, d, v) for (n, d), v in Fc.items() if (n, d) != dep] + [(ref, 1, -1.0)]
+        L += ["*EQUATION", f"{len(terms)}"]
+        for i in range(0, len(terms), 4):
+            L.append(", ".join(f"{n + 1}, {d}, {v:.12g}" for n, d, v in terms[i : i + 4]))
+        L += ["*BOUNDARY", f"{ref + 1}, 2, 3, 0.", f"{ref + 2}, 2, 3, 0."]
+    solid_only = len(model.solids) > 0 and not model.beams and not model.shells
+    zero = [(n, d) for (n, d), v in table.items() if v == 0.0 and not (solid_only and d > 3)]
+    moving = [(n, d, v) for (n, d), v in table.items() if v != 0.0 and not (solid_only and d > 3)]
+    if model.solids is not None and len(model.solids):
+        extra_z = []
+        for (a, b), mnode in mids.items():
+            for d in (1, 2, 3):
+                if (a, d) in table and (b, d) in table and table[(a, d)] == 0.0 and table[(b, d)] == 0.0:
+                    extra_z.append((mnode, d))
+        zero += extra_z
+    else:
+        for (a, b), mnode in mids.items():
+            for d in range(1, 7):
+                if (a, d) in table and (b, d) in table:
+                    va, vb = table[(a, d)], table[(b, d)]
+                    if mnode in slaves and d <= 3:
+                        continue
+                    if va == 0.0 and vb == 0.0:
+                        zero.append((mnode, d))
+                    else:
+                        moving.append((mnode, d, 0.5 * (va + vb)))
+    if zero:
+        L.append("*BOUNDARY")
+        L += [f"{n + 1}, {d}, {d}, 0." for n, d in zero]
+    kind = st["type"]
+    nl = bool(st.get("nlgeom")) or plastic
+    inc = max(1, int(st.get("increments", 25)))
+    if kind == "buckle":
+        L += ["*STEP", "*BUCKLE", f"{int(st.get('modes', 5))}"]
+    elif kind == "modal":
+        L += ["*STEP", "*FREQUENCY", f"{int(st.get('modes', 5))}"]
+    elif nl or (moving or ref is not None) and inc > 1 and st.get("nlgeom"):
+        L += ["*STEP, NLGEOM, INC=100000" if st.get("nlgeom") else "*STEP, INC=100000", "*STATIC", f"{1.0 / inc:.6g}, 1., 1e-8, {1.0 / inc:.6g}"]
+    else:
+        L += ["*STEP", "*STATIC"]
+    if moving and kind != "modal":
+        L.append("*BOUNDARY")
+        L += [f"{n + 1}, {d}, {d}, {v:.9g}" for n, d, v in moving]
+    if ref is not None:
+        L += ["*BOUNDARY", f"{ref + 2}, 1, 1, {ctl['amp'] if kind == 'static' else 0.0:.9g}"]
+    meta_cload = {}
+    if kind != "modal":
+        a = assemble(model, spec)
+        F = nodal(a)
+        meta_cload = dict(F)
         if F:
             L.append("*CLOAD")
             L += [f"{n + 1}, {d}, {v:.9g}" for (n, d), v in F.items()]
@@ -345,8 +377,23 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False):
         L += [f"*NODE FILE{o2}", "U"]
     else:
         L += [f"*NODE FILE{o2}", "U, RF", "*EL FILE", "S", "*EL PRINT, ELSET=EALL, TOTALS=ONLY", "ELSE"]
+        if ref is not None:
+            L += ["*NODE PRINT, NSET=NREF", "U", "*NODE PRINT, NSET=NREF2", "RF"]
     L.append("*END STEP")
     meta = {"nodes": np.array(nodes, dtype=float), "bc": sorted({n for n, _, _ in moving}) if moving else sorted({n for n, _ in zero}), "hinge_elems": [e for k, v in elsets.items() if k[0] == "HB" for e in v]}
+    cb = next((x for x in spec["bcs"] if x["id"] == "ctl"), None)
+    if cb is not None:
+        cn = set(int(i) for i in cb["select"]["nodes"])
+        cs = {master_of.get(n, n) for n in cn}
+        for (i, j), mnode in mids.items():
+            if i in cn and j in cn:
+                cs.add(master_of.get(mnode, mnode))
+        d0 = cb["dofs"][0]
+        meta["ctl"] = sorted(n for n, d, _ in moving if d == d0 and n in cs)
+    meta["ref"] = ref
+    meta["cload"] = meta_cload
+    if ref is not None:
+        meta["hinge_elems"].append(ctl_eid)
     return "\n".join(L) + "\n", notes, meta
 
 
@@ -491,6 +538,35 @@ def _totals(dat):
     return out
 
 
+def _ref_forces(dat):
+    f = [float(m.group(1)) for m in re.finditer(r"forces \(fx,fy,fz\) for set NREF2 and time\s+\S+\s+\d+\s+(\S+)", dat)]
+    q = [float(m.group(1)) for m in re.finditer(r"displacements \(vx,vy,vz\) for set NREF and time\s+\S+\s+\d+\s+(\S+)", dat)]
+    return f, q
+
+
+def machine_stiffness(model, base, spec, ctl):
+    sp = dict(spec)
+    sp["loads"] = ctl["one"]["loads"]
+    sp["bcs"] = [dict(b, value=0.0) for b in spec["bcs"]]
+    k = None
+    try:
+        inp, _, meta = build_inp(model, base, sp, step={"type": "static", "nlgeom": False, "increments": 1}, out2d=True)
+        frd, _, _ = run_ccx(inp)
+        _, _, blocks = parse_frd(frd)
+        b = [x for x in blocks if x["name"].startswith("DISP")][-1]
+        U = np.zeros((len(meta["nodes"]) + 1, 3))
+        ok = b["ids"] <= len(meta["nodes"])
+        U[b["ids"][ok]] = b["values"][ok][:, :3]
+        q = sum(v * U[n + 1, d - 1] for (n, d), v in meta["cload"].items() if d <= 3) / ctl["N"]
+        if np.isfinite(q) and q > 0:
+            k = ctl["N"] / q
+    except Exception:
+        k = None
+    if k is None:
+        k = ctl["N"] / max(ctl["amp"], 1e-12)
+    return 1000.0 * k
+
+
 def _factors(dat):
     out = []
     m = re.search(r"B U C K L I N G   F A C T O R   O U T P U T(.*?)(?:\n\s*\n\s*\n|\Z)", dat, re.S)
@@ -513,12 +589,52 @@ def _freqs(dat):
     return out
 
 
+def buckle_mode(model, base, spec):
+    sp = dict(spec)
+    sp["step"] = dict(spec["step"])
+    sp["step"].pop("control", None)
+    if not sp["loads"]:
+        return None
+    try:
+        inp, _, _ = build_inp(model, base, sp, step={"type": "buckle", "modes": 1}, out2d=True)
+        frd, dat, _ = run_ccx(inp)
+        _, _, blocks = parse_frd(frd)
+    except Exception:
+        return None
+    disp = [b for b in blocks if b["name"].startswith("DISP")]
+    if not disp:
+        return None
+    b = disp[-1]
+    mode = np.zeros((len(model.nodes), 3))
+    ok = b["ids"] <= len(model.nodes)
+    mode[b["ids"][ok] - 1] = b["values"][ok][:, :3]
+    mx = np.abs(mode).max()
+    if not np.isfinite(mx) or mx <= 0:
+        return None
+    return mode / mx
+
+
 def solve(model, base, spec, progress=None):
+    from ..control import disp_control
+
+    orig = spec
+    spec, ctl = disp_control(model, spec)
     st = spec["step"]
     kind = "static" if st["type"] == "arclength" else st["type"]
     notes = []
     perturb = None
     step = {"type": kind}
+    if ctl:
+        notes += ctl["notes"]
+        if not st.get("nlgeom"):
+            notes.append("기하비선형이 꺼져 있어 좌굴 이후 거동은 나오지 않습니다 (선형 변위 제어)")
+    if st["type"] == "arclength":
+        step["nlgeom"] = True
+        if not ctl:
+            notes.append("CalculiX에는 호장법이 없어 하중 제어 비선형 정적 해석으로 풀었습니다. 극한점 이후 거동은 변위 제어를 켜야 따라갑니다")
+    nlg = bool(st.get("nlgeom")) or st["type"] == "arclength"
+    if ctl and ctl["kind"] == "average":
+        ctl["k"] = machine_stiffness(model, base, spec, ctl)
     ref_load = 0.0
     if kind == "buckle":
         from ..loads import lumped
@@ -528,23 +644,21 @@ def solve(model, base, spec, progress=None):
         ref_load = net if net > 1e-9 else float(np.linalg.norm(F, axis=1).sum()) / 2
         if ref_load <= 1e-9:
             raise ValueError("좌굴 해석에는 기준이 되는 압축 하중이 필요합니다. 하중(힘 또는 압력)을 먼저 추가하세요")
-    if kind == "static" and st.get("nlgeom") and float(st.get("imperfection") or 0) > 0:
-        inp, _, _ = build_inp(model, base, spec, step={"type": "buckle", "modes": 1}, out2d=True)
-        frd, dat, _ = run_ccx(inp)
-        _, _, blocks = parse_frd(frd)
-        disp = [b for b in blocks if b["name"].startswith("DISP")]
-        if disp:
-            b = disp[0]
-            mode = np.zeros((len(model.nodes), 3))
-            ok = b["ids"] <= len(model.nodes)
-            mode[b["ids"][ok] - 1] = b["values"][ok][:, :3]
-            mx = np.abs(mode).max()
-            if mx > 0:
-                perturb = mode / mx * float(st["imperfection"])
-                notes.append(f"초기 결함: 1차 좌굴 모드 x {float(st['imperfection']):g} mm")
-    inp, n2, meta = build_inp(model, base, spec, step=step, perturb=perturb)
+    if kind == "static" and nlg and float(st.get("imperfection") or 0) > 0:
+        mode = buckle_mode(model, base, orig)
+        if mode is not None:
+            perturb = mode * float(st["imperfection"])
+            notes.append(f"초기 결함: 1차 좌굴 모드 x {float(st['imperfection']):g} mm")
+        else:
+            notes.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다")
+    inp, n2, meta = build_inp(model, base, spec, step=step, perturb=perturb, ctl=ctl)
     notes += n2
-    frd, dat, out = run_ccx(inp)
+    try:
+        frd, dat, out = run_ccx(inp)
+    except RuntimeError as e:
+        if "increment size smaller" in str(e) and kind == "static" and not ctl:
+            raise RuntimeError("하중 제어 비선형 해석이 극한점(좌굴·스냅스루) 부근에서 더 나아가지 못했습니다. '변위제어'를 켜면 그 이후 거동까지 따라갑니다\n" + str(e))
+        raise
     nodes, elems, blocks = parse_frd(frd)
     hide = set(meta.get("hinge_elems", []))
     elems = [e for e in elems if e[2] not in hide]
@@ -580,6 +694,14 @@ def solve(model, base, spec, progress=None):
         bcpos = meta["nodes"][np.array(meta["bc"])]
         span = float(np.linalg.norm(meta["nodes"].max(axis=0) - meta["nodes"].min(axis=0))) or 1.0
         sup = cKDTree(bcpos).query(meta["nodes"][near])[0] <= 1e-9 * span
+    csel = None
+    if ctl and ctl["kind"] == "rigid" and forc and meta.get("ctl"):
+        from scipy.spatial import cKDTree
+
+        near = cKDTree(meta["nodes"]).query(np.array([nodes[i] for i in forc[0]["ids"]]))[1]
+        span = float(np.linalg.norm(meta["nodes"].max(axis=0) - meta["nodes"].min(axis=0))) or 1.0
+        csel = cKDTree(meta["nodes"][np.array(meta["ctl"])]).query(meta["nodes"][near])[0] <= 1e-9 * span
+    cforce = []
     factors = _factors(dat) if kind == "buckle" else []
     freqs = _freqs(dat) if kind == "modal" else []
     energy = _totals(dat)
@@ -610,6 +732,8 @@ def solve(model, base, spec, progress=None):
                 smax.append(float(fields["vonMises"].max()))
             if k < len(forc) and sup is not None and len(forc[k]["ids"]) == len(sup):
                 reac.append(forc[k]["values"][sup][:, :3].sum(axis=0).tolist())
+            if k < len(forc) and csel is not None and len(forc[k]["ids"]) == len(csel):
+                cforce.append(ctl["sign"] * float(forc[k]["values"][csel][:, ctl["axis"]].sum()))
         res.add_frame(label, t, U, fields)
         times.append(t)
         umax.append(float(np.linalg.norm(U, axis=1).max()))
@@ -631,6 +755,15 @@ def solve(model, base, spec, progress=None):
             res.summary["반력 합 (N)"] = [round(x, 4) for x in reac[-1]]
         if energy:
             res.summary["변형에너지 (N·mm)"] = energy[-1]
+        if ctl:
+            from ..control import record
+
+            if ctl["kind"] == "average":
+                cf, cq = _ref_forces(dat)
+                if len(cf) >= len(times) and len(cq) >= len(times):
+                    record(res, ctl, None, cf[-len(times) :], cq[-len(times) :])
+            elif len(cforce) == len(times):
+                record(res, ctl, times, cforce)
     elif kind == "buckle":
         res.history["mode"] = list(range(1, len(factors) + 1))
         res.history["buckling.factor"] = factors

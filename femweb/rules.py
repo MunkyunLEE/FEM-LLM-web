@@ -488,6 +488,7 @@ HELP = (
     "하중: '끝단에 아래로 2 kN', '윗면에 압력 0.5 MPa', 'x 최대 변에 선하중 10 N/mm 아래로', '자중'. "
     "강제변위: 'x 최대 면을 x 방향으로 -5 mm'. 재료·단면: '알루미늄으로', '두께 2 mm', '보 단면 20x40'. "
     "힌지: '쉘 사이 공유 엣지를 핀 조인트로', '힌지 강성 0.05'. 해석: '좌굴 모드 4개', '비선형 증분 30', '해석 실행'. "
+    "좌굴 후 거동: '변위제어 5 mm', '초기결함 0.1', '강체 압판으로 변위제어', '하중제어로', '분기 전환 꺼줘'. "
     "그래프: '시간-총에너지 그래프', '하중-변위 곡선'. 수정: 'ld1 2배', 'bc2 삭제', '되돌려'."
 )
 
@@ -507,6 +508,8 @@ def parse_plot(c, model, spec, ctx):
     sel, _ = selection(cc, model, spec, ctx)
     series = []
     title = []
+    if ld and spec["step"].get("control") == "displacement" and not axm:
+        return {"op": "add_plot", "title": "하중-변위 곡선 (변위 제어)", "x": {"quantity": "control.disp"}, "series": [{"quantity": "control.force"}]}
     if ld:
         a = axm.group(1) if axm else None
         if a is None:
@@ -561,6 +564,13 @@ def parse_clause(text, model, spec, ctx):
         return [], ["어떤 값을 그릴지 알려주세요 (에너지, 반력, 변위, 응력, 접힘각, 하중-변위, 좌굴 계수, 고유진동수)"], [], [], {}
     if re.search(r"되돌려|되돌리|실행\s*취소|방금\s*(?:거|것|한\s*거)?\s*(?:취소|삭제|지워)|이전\s*(?:상태)?로|(?<![a-z])undo(?![a-z])|revert", t):
         return [], [], [], [], {"undo": True}
+    ctl_load = None
+    if re.search(r"변위\s*제어|displacement\s*-?\s*control", t):
+        m = c.take(r"(?<![a-z])ld\s*(\d+)(?![a-z0-9])\s*(?:을|를|으로|로)?\s*(?:기준(?:으로)?)?")
+        if m:
+            ctl_load = "ld" + m.group(1)
+            if not any(x["id"] == ctl_load for x in spec["loads"]):
+                return [], [f"{ctl_load} 하중이 없습니다"], [], [], {}
     idm = c.take(r"(?<![a-z])(bc|ld|pl)\s*(\d+)(?![a-z0-9])")
     target = None
     if idm:
@@ -623,6 +633,30 @@ def parse_clause(text, model, spec, ctx):
     m = c.take(r"(?:초기\s*결함|초기\s*불완전|imperfection)\s*(?:을|를|은|는|=|크기)?\s*" + NUM + r"\s*(?:mm)?")
     if m:
         st["imperfection"] = _f(m)
+    if c.take(r"변위\s*제어|변위\s*증분|displacement\s*-?\s*control(?:led)?"):
+        if c.take(r"끄|꺼|off|해제|없이|말고|제외|disable|without|취소"):
+            st["control"] = "load"
+        else:
+            st["control"] = "displacement"
+            m = c.take(r"(?:목표\s*변위|최대\s*변위|목표|target)?\s*(?:를|을|는|=)?\s*" + NUM + r"\s*(mm|cm|m)(?![a-z])\s*(?:까지|만큼)?")
+            if m:
+                st["control_disp"] = abs(_f(m)) * {"mm": 1.0, "cm": 10.0, "m": 1000.0}[m.group(2).lower()]
+            if ctl_load:
+                st["control_load"] = ctl_load
+            if "nlgeom" not in st and st.get("type") not in ("buckle", "modal"):
+                st["nlgeom"] = True
+            c.takeall(r"켜(?:고|서)?|적용|사용|으로|로")
+    elif c.take(r"하중\s*제어|load\s*-?\s*control(?:led)?"):
+        st["control"] = "load"
+    if c.take(r"강체\s*압판|압판|platen|rigid\s*(?:plate|platen)|똑같이\s*밀"):
+        st["control_kind"] = "rigid"
+        st.setdefault("control", "displacement")
+    elif c.take(r"하중\s*분포\s*(?:를)?\s*유지|평균\s*변위|분포\s*유지"):
+        st["control_kind"] = "average"
+        st.setdefault("control", "displacement")
+    if c.take(r"분기\s*(?:점)?\s*(?:전환|추적|감지|회피)?|가지\s*전환|branch\s*switch(?:ing)?|bifurcation"):
+        st["branch"] = "primary" if c.take(r"끄|꺼|off|해제|없이|말고|제외|disable|without|하지\s*마|주\s*경로") else "auto"
+        c.takeall(r"켜(?:고|서)?|적용|사용")
     if st.get("type") in ("buckle", "modal") and "modes" not in st:
         m = c.take(r"(\d+)\s*(?:개|차)(?:까지)?")
         if m:
@@ -1164,6 +1198,16 @@ def describe_op(o):
         for a, b in (("increments", "증분"), ("modes", "모드"), ("imperfection", "초기결함")):
             if a in o:
                 s.append(f"{b} {o[a]:g}")
+        if "control" in o:
+            s.append("변위 제어" if o["control"] == "displacement" else "하중 제어")
+        if o.get("control_disp"):
+            s.append(f"목표 변위 {o['control_disp']:g} mm")
+        if o.get("control_load"):
+            s.append(f"기준 하중 {o['control_load']}")
+        if "control_kind" in o:
+            s.append("강체 압판" if o["control_kind"] == "rigid" else "하중 분포 유지")
+        if "branch" in o:
+            s.append("분기 전환 " + ("켬" if o["branch"] == "auto" else "끔"))
         return "해석 설정: " + ", ".join(s)
     if k == "set_solver":
         return f"솔버: {o['solver']}"

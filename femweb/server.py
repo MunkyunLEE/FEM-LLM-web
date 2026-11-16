@@ -496,7 +496,15 @@ def export_inp():
     with lock:
         need_model()
         try:
-            text, notes, _ = calculix.build_inp(active(), eff_base(), S["spec"], step={"type": "static" if S["spec"]["step"]["type"] == "arclength" else S["spec"]["step"]["type"]})
+            from .control import disp_control
+
+            sp, ctl = disp_control(active(), S["spec"])
+            st = {"type": "static" if sp["step"]["type"] == "arclength" else sp["step"]["type"]}
+            if sp["step"]["type"] == "arclength":
+                st["nlgeom"] = True
+            if ctl and ctl["kind"] == "average":
+                ctl["k"] = calculix.machine_stiffness(active(), eff_base(), sp, ctl)
+            text, notes, _ = calculix.build_inp(active(), eff_base(), sp, step=st, ctl=ctl)
         except Exception as e:
             fail(e)
         return PlainTextResponse(text, headers={"Content-Disposition": "attachment; filename=job.inp"})

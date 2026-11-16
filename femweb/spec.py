@@ -26,7 +26,7 @@ def default_spec(model=None):
         "hinge_auto": {"mode": "off", "angle": 5.0},
         "bcs": [],
         "loads": [],
-        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0},
+        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto"},
         "plots": [],
     }
 
@@ -211,6 +211,29 @@ def apply_ops(spec, ops, model=None):
                     st[f] = max(1, int(op[f]))
             if "imperfection" in op:
                 st["imperfection"] = _num(op["imperfection"], "imperfection")
+            if "control" in op:
+                c = str(op["control"] or "load").lower()
+                if c not in ("load", "displacement"):
+                    raise ValueError("control 은 load 또는 displacement 여야 합니다")
+                st["control"] = c
+            if "control_disp" in op:
+                st["control_disp"] = abs(_num(op["control_disp"] or 0.0, "control_disp"))
+                if "control" not in op and st["control_disp"] > 0:
+                    st["control"] = "displacement"
+            if "control_kind" in op:
+                if op["control_kind"] not in ("average", "rigid"):
+                    raise ValueError("control_kind 는 average 또는 rigid 여야 합니다")
+                st["control_kind"] = op["control_kind"]
+            if "control_load" in op:
+                st["control_load"] = op["control_load"] or None
+            if "branch" in op:
+                if op["branch"] not in ("auto", "primary"):
+                    raise ValueError("branch 는 auto 또는 primary 여야 합니다")
+                st["branch"] = op["branch"]
+            if st.get("control") == "displacement" and not any(s2.get("quantity") == "control.force" for pl in spec["plots"] for s2 in pl.get("series", [])):
+                spec["plots"].append({"id": _next_id(spec["plots"], "pl"), "title": "하중-변위 곡선 (변위 제어)", "x": {"quantity": "control.disp"}, "series": [{"quantity": "control.force"}]})
+            if st.get("control") != "displacement":
+                spec["plots"] = [pl for pl in spec["plots"] if not any(s2.get("quantity") == "control.force" for s2 in pl.get("series", []))]
             log.append("스텝 설정")
         elif k == "set_solver":
             if op.get("solver") not in SOLVERS:
@@ -253,6 +276,12 @@ def warnings_for(spec, model):
             t.update(d for d in b["dofs"] if d <= 3)
         if t != {1, 2, 3}:
             out.append("병진 자유도 중 구속되지 않은 방향이 있습니다: " + ", ".join("xyz"[d - 1] for d in (1, 2, 3) if d not in t))
+    st = spec["step"]
+    if st.get("control") == "displacement":
+        if st["type"] in ("buckle", "modal"):
+            out.append("변위 제어는 정적·호장법 스텝에서만 쓰입니다 (좌굴·모달에서는 무시)")
+        elif not any(ld["type"] in ("force", "pressure") for ld in spec["loads"]):
+            out.append("변위 제어에는 기준이 되는 힘 또는 압력 하중이 필요합니다")
     moving = any(abs(b.get("value", 0.0)) > 0 for b in spec["bcs"])
     if not spec["loads"] and not moving and spec["step"]["type"] != "modal":
         out.append("하중이나 지정 변위가 없습니다")

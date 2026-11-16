@@ -31,10 +31,9 @@ class Truss:
         lk = np.linalg.norm(rkj, axis=1)
         mm = np.einsum("ij,ij->i", m, m)
         nn = np.einsum("ij,ij->i", n, n)
-        c = np.einsum("ij,ij->i", m, n) / np.sqrt(mm * nn)
         s = np.einsum("ij,ij->i", m, rkl)
-        th = np.arccos(np.clip(c, -1.0, 1.0))
-        th = np.where(s < 0, 2 * np.pi - th, th)
+        th = np.arctan2(lk * s, np.einsum("ij,ij->i", m, n))
+        th = np.where(th < 0, th + 2 * np.pi, th)
         if not grad:
             return th
         di = (lk / mm)[:, None] * m
@@ -176,94 +175,316 @@ def newton(tr, x, free, fext, tol=1e-8, itmax=60):
     return flat.reshape(-1, 3), itmax, False, soft
 
 
-def run_static(tr, free, pres, pval, F0, n):
+def low_modes(H, k=6):
+    n = H.shape[0]
+    if n == 0:
+        return None
+    d = float(abs(H.diagonal()).max()) or 1.0
+    try:
+        if n <= 1800:
+            from scipy.linalg import eigh
+
+            w, V = eigh(H.toarray(), subset_by_index=[0, min(k, n) - 1])
+        else:
+            from scipy.sparse.linalg import eigsh
+
+            w, V = eigsh(H, k=min(k, n - 2), which="SA", tol=1e-7, maxiter=4000)
+            o = np.argsort(w)
+            w, V = w[o], V[:, o]
+    except Exception:
+        return None
+    return int((w < -1e-9 * d).sum()), w, V
+
+
+class Tracker:
+    def __init__(self, tr, free, st, scale):
+        self.tr = tr
+        self.free = free
+        self.on = st.get("branch", "auto") != "primary"
+        self.prev = None
+        self.switches = 0
+        self.scale = scale
+        self.counts = []
+        self.msgs = []
+        self.last = None
+
+    def look(self, x):
+        self.last = low_modes(self.tr.hessian(x.reshape(-1, 3), self.free))
+        return self.last
+
+    def rose(self):
+        return self.last is not None and self.prev is not None and self.last[0] > self.prev
+
+    def accept(self):
+        if self.last is not None:
+            self.prev = self.last[0]
+        self.counts.append(self.prev if self.prev is not None else 0)
+
+    def mode(self):
+        n, w, V = self.last
+        j = max(0, min(n, V.shape[1]) - 1)
+        phi = V[:, j].copy()
+        i = int(np.argmax(np.abs(phi)))
+        return phi * (1.0 if phi[i] > 0 else -1.0) / np.abs(phi[i])
+
+
+def run_static(tr, free, pres, pval, F0, n, st=None, pat=None):
+    st = st or {}
     x = tr.X.copy()
     frames = []
     msgs = []
     lam_done = 0.0
     step = 1.0 / n
-    lam = 0.0
     cuts = 0
+    scale = float(np.mean(tr.L0))
+    lamc = 0.0
+    trk = Tracker(tr, free, st, scale)
+    trk.look(tr.X)
+    trk.accept()
+    trk.counts = []
+    X0 = tr.X.ravel()
+
+    def attempt(xs, lam, lc):
+        trial = xs.copy().ravel()
+        trial[pres] = X0[pres] + lam * pval
+        if pat is None:
+            xn, it, ok, soft = newton(tr, trial.reshape(-1, 3), free, lam * F0.ravel())
+            return xn, lc, ok, soft
+        return newton_dc(tr, trial.reshape(-1, 3), free, lam * F0.ravel(), pat["f"], pat["c"], lam * pat["amp"], lc)
+
     while lam_done < 1.0 - 1e-12:
         lam = min(1.0, lam_done + step)
-        trial = x.copy().ravel()
-        trial[pres] = tr.X.ravel()[pres] + lam * pval
-        xn, it, ok, soft = newton(tr, trial.reshape(-1, 3), free, lam * F0.ravel())
+        xn, lcn, ok, soft = attempt(x, lam, lamc)
         if not ok:
             cuts += 1
             step *= 0.5
             if cuts > 12:
-                msgs.append(f"하중계수 {lam_done:.4g} 이후 수렴 실패")
+                msgs.append(f"진행률 {lam_done:.4g} 이후 수렴 실패")
                 break
             continue
+        ref_keep = tr.ref.copy()
+        tr.ref = tr._unwrap(tr.angles(xn)) if len(tr.h) else tr.ref
+        if trk.look(xn) is not None and trk.rose() and trk.on and trk.switches < 3:
+            if step > 1.0 / (8 * n) and lam < 1.0:
+                tr.ref = ref_keep
+                step *= 0.5
+                continue
+            phi = np.zeros(xn.size)
+            phi[free] = trk.mode()
+            done = False
+            base_ref = tr.ref.copy()
+            for a in (1e-3, 3e-3, 1e-2, 3e-2, 1e-1):
+                for sg in (1.0, -1.0):
+                    tr.ref = base_ref.copy()
+                    xt, lct, ok2, _ = attempt((xn.ravel() + sg * a * scale * phi).reshape(-1, 3), lam, lcn)
+                    if not ok2:
+                        continue
+                    tr.ref = tr._unwrap(tr.angles(xt)) if len(tr.h) else tr.ref
+                    lm = low_modes(tr.hessian(xt, free))
+                    if lm is not None and lm[0] <= trk.prev and np.abs(xt - xn).max() > 1e-7 * scale:
+                        xn, lcn = xt, lct
+                        trk.last = lm
+                        done = True
+                        break
+                if done:
+                    break
+            if done:
+                trk.switches += 1
+                msgs.append(f"분기점 감지: 진행률 {lam:.4g} 부근에서 주 경로가 불안정해져 좌굴 모드 방향의 안정한 가지로 옮겼습니다")
+            else:
+                tr.ref = base_ref
+                msgs.append(f"분기점 감지: 진행률 {lam:.4g} 부근에서 불안정해졌지만 안정한 가지를 찾지 못해 주 경로를 유지했습니다")
+                trk.prev = trk.last[0]
+        trk.accept()
         x = xn
-        tr.ref = tr._unwrap(tr.angles(x)) if len(tr.h) else tr.ref
+        lamc = lcn
         lam_done = lam
-        frames.append((lam, x.copy()))
+        frames.append((lam, x.copy(), lamc))
         if soft and "특이" not in " ".join(msgs):
             msgs.append("강성행렬이 특이에 가깝습니다 (기구 또는 구속 부족 가능)")
         if step < 1.0 / n:
             step = min(1.0 / n, step * 2)
-    return frames, msgs
+    return frames, msgs, trk.counts
 
 
-def run_arclength(tr, free, F0, n, dlam0):
+def newton_dc(tr, x, free, fext, fc, c, q, lam, tol=1e-8, itmax=60):
+    flat = x.ravel().copy()
+    X0 = tr.X.ravel()
+    fnorm = max(np.linalg.norm(fc), np.linalg.norm(fext), 1e-12)
+    scale = float(np.mean(tr.L0))
+    soft = False
+    cf = c[free]
+    for it in range(itmax):
+        g = tr.gradient(flat.reshape(-1, 3)).ravel()
+        r = (fext + lam * fc - g)[free]
+        qe = q - c @ (flat - X0)
+        if np.linalg.norm(r) <= tol * max(fnorm, abs(lam) * np.linalg.norm(fc)) and abs(qe) <= 1e-9 * max(abs(q), 1e-6 * scale):
+            return flat.reshape(-1, 3), lam, True, soft
+        H = tr.hessian(flat.reshape(-1, 3), free)
+        dr, s1 = _solve(H, r)
+        dt, s2 = _solve(H, fc[free])
+        soft = soft or s1 or s2
+        den = cf @ dt
+        if abs(den) < 1e-14 * max(np.linalg.norm(dt), 1e-30):
+            return flat.reshape(-1, 3), lam, False, soft
+        dl = (qe - cf @ dr) / den
+        du = dr + dl * dt
+        mx = np.abs(du).max()
+        if not np.isfinite(mx):
+            return flat.reshape(-1, 3), lam, False, soft
+        k = min(1.0, 0.5 * scale / mx) if mx > 0 else 1.0
+        flat[free] += k * du
+        lam += k * dl
+    return flat.reshape(-1, 3), lam, False, soft
+
+
+def run_arclength(tr, free, F0, n, dlam0, st=None):
+    st = st or {}
     x = tr.X.copy().ravel()
     f = F0.ravel()
+    ff = f[free]
     frames = []
     msgs = []
     lam = 0.0
     H = tr.hessian(x.reshape(-1, 3), free)
-    ut, _ = _solve(H, f[free])
-    dl = dlam0 * np.linalg.norm(ut)
+    ut, _ = _solve(H, ff)
+    dl0 = dlam0 * np.linalg.norm(ut)
+    dl = dl0
     prev = None
-    for stepi in range(n):
-        ok = False
-        for attempt in range(8):
-            H = tr.hessian(x.reshape(-1, 3), free)
-            ut, _ = _solve(H, f[free])
-            sgn = 1.0 if prev is None else np.sign(prev @ ut) or 1.0
-            dlam = sgn * dl / np.linalg.norm(ut)
-            du = dlam * ut
+    scale = float(np.mean(tr.L0))
+    trk = Tracker(tr, free, st, scale)
+    trk.look(x.reshape(-1, 3))
+    trk.accept()
+    trk.counts = []
+    fl1 = max(np.abs(ff).sum(), 1e-30)
+    its = [0]
+
+    def corrector(du, dlam, dl):
+        xi = x.copy()
+        for it in range(40):
             xi = x.copy()
-            good = False
-            for it in range(40):
-                xi = x.copy()
-                xi[free] += du
-                g = tr.gradient(xi.reshape(-1, 3)).ravel()
-                r = ((lam + dlam) * f - g)[free]
-                if np.linalg.norm(r) <= 1e-8 * max(np.linalg.norm(f), 1e-12):
-                    good = True
-                    break
-                H = tr.hessian(xi.reshape(-1, 3), free)
-                ur, _ = _solve(H, r)
-                ut, _ = _solve(H, f[free])
-                a = ut @ ut
-                b = 2 * (du + ur) @ ut
-                c = (du + ur) @ (du + ur) - dl * dl
-                disc = b * b - 4 * a * c
-                if disc < 0:
-                    break
-                r1 = (-b + np.sqrt(disc)) / (2 * a)
-                r2 = (-b - np.sqrt(disc)) / (2 * a)
-                c1 = (du + ur + r1 * ut) @ du
-                c2 = (du + ur + r2 * ut) @ du
-                dd = r1 if c1 >= c2 else r2
-                du = du + ur + dd * ut
-                dlam += dd
-            if good:
-                ok = True
-                break
-            dl *= 0.5
+            xi[free] += du
+            g = tr.gradient(xi.reshape(-1, 3)).ravel()
+            r = ((lam + dlam) * f - g)[free]
+            if np.linalg.norm(r) <= 1e-8 * max(np.linalg.norm(f), 1e-12):
+                its[0] = it
+                return True, xi, du, dlam
+            H = tr.hessian(xi.reshape(-1, 3), free)
+            ur, _ = _solve(H, r)
+            ut, _ = _solve(H, ff)
+            a = ut @ ut
+            b = 2 * (du + ur) @ ut
+            c = (du + ur) @ (du + ur) - dl * dl
+            disc = b * b - 4 * a * c
+            if disc < 0:
+                return False, xi, du, dlam
+            r1 = (-b + np.sqrt(disc)) / (2 * a)
+            r2 = (-b - np.sqrt(disc)) / (2 * a)
+            c1 = (du + ur + r1 * ut) @ du
+            c2 = (du + ur + r2 * ut) @ du
+            dd = r1 if c1 >= c2 else r2
+            du = du + ur + dd * ut
+            dlam += dd
+        return False, xi, du, dlam
+
+    stepi = 0
+    fails = 0
+    while stepi < n:
+        H = tr.hessian(x.reshape(-1, 3), free)
+        ut, _ = _solve(H, ff)
+        sgn = 1.0 if prev is None else np.sign(prev @ ut) or 1.0
+        dlam = sgn * dl / np.linalg.norm(ut)
+        ok, xi, du, dlam = corrector(dlam * ut, dlam, dl)
         if not ok:
-            msgs.append(f"호장법 {stepi + 1}번째 증분에서 수렴 실패")
-            break
+            fails += 1
+            dl *= 0.5
+            if fails > 8:
+                msgs.append(f"호장법 {stepi + 1}번째 증분에서 수렴 실패")
+                break
+            continue
+        fails = 0
+        ref_keep = tr.ref.copy()
+        tr.ref = tr._unwrap(tr.angles(xi.reshape(-1, 3))) if len(tr.h) else tr.ref
+        switched = False
+        if trk.look(xi.reshape(-1, 3)) is not None and trk.rose() and trk.on and trk.switches < 3:
+            phi = trk.mode()
+            if abs(phi @ ff) / fl1 < 1e-3:
+                if dl > dl0 / 8:
+                    tr.ref = ref_keep
+                    dl *= 0.5
+                    continue
+                x0, lam0, base_ref = x, lam, tr.ref.copy()
+                x = xi
+                lam = lam + dlam
+                ph = phi / np.linalg.norm(phi)
+                for sg in (1.0, -1.0):
+                    for dls in (max(dl0, 2e-3 * scale), max(dl0, 2e-2 * scale), 0.5 * dl0):
+                        tr.ref = base_ref.copy()
+                        ok2, xb, dub, dlb = corrector(sg * dls * ph, 0.0, dls)
+                        if ok2 and abs(dub @ ph) / max(np.linalg.norm(dub), 1e-30) > 0.5:
+                            frames.append((lam, x.reshape(-1, 3).copy()))
+                            trk.accept()
+                            xi, du, dlam = xb, dub, dlb
+                            tr.ref = tr._unwrap(tr.angles(xi.reshape(-1, 3))) if len(tr.h) else tr.ref
+                            trk.look(xi.reshape(-1, 3))
+                            switched = True
+                            stepi += 1
+                            break
+                    if switched:
+                        break
+                if switched:
+                    trk.switches += 1
+                    msgs.append(f"분기점 감지: 하중계수 {lam:.4g} 부근에서 좌굴 모드 방향의 가지로 옮겼습니다")
+                    dl = dl0
+                else:
+                    x, lam = x0, lam0
+                    tr.ref = base_ref
+                    msgs.append(f"분기점 감지: 하중계수 {lam0 + dlam:.4g} 부근에서 가지 전환에 실패해 주 경로를 유지했습니다")
+                    trk.look(xi.reshape(-1, 3))
         x = xi
         lam += dlam
         prev = du
-        tr.ref = tr._unwrap(tr.angles(x.reshape(-1, 3))) if len(tr.h) else tr.ref
+        trk.accept()
         frames.append((lam, x.reshape(-1, 3).copy()))
-    return frames, msgs
+        stepi += 1
+        if dl < dl0:
+            dl = min(dl0, dl * 1.5)
+        elif trk.switches and its[0] <= 4 and np.abs(du).max() < 0.05 * scale:
+            dl = dl * 1.5
+        elif its[0] >= 8:
+            dl = max(dl0, dl / 1.5)
+    return frames, msgs, trk.counts
+
+
+def buckling_mode(tr, free, F0):
+    from scipy.linalg import eigh
+
+    n = len(free)
+    if n == 0 or n > 2500:
+        return None, None
+    X = tr.X
+    K0 = tr.hessian(X, free)
+    f = F0.ravel()[free]
+    if np.abs(f).sum() == 0:
+        return None, None
+    u, _ = _solve(K0, f)
+    mx = np.abs(u).max()
+    if not np.isfinite(mx) or mx <= 0:
+        return None, None
+    d = 1e-4 * float(np.mean(tr.L0)) / mx
+    xp = X.ravel().copy()
+    xp[free] += d * u
+    Kg = (tr.hessian(xp.reshape(-1, 3), free) - K0).toarray() / d
+    Kg = 0.5 * (Kg + Kg.T)
+    try:
+        w, V = eigh(-Kg, K0.toarray(), subset_by_index=[n - 1, n - 1])
+    except Exception:
+        return None, None
+    if w[-1] <= 0:
+        return None, None
+    phi = np.zeros(X.size)
+    phi[free] = V[:, -1]
+    return 1.0 / w[-1], phi.reshape(-1, 3)
 
 
 def build(model, spec):
@@ -360,17 +581,45 @@ def build(model, spec):
 
 
 def solve(model, spec, progress=None):
+    from ..control import disp_control, record as ctl_record
+
     if not model.shells:
         raise ValueError("바-힌지 솔버에는 면(f) 패널이 필요합니다")
-    tr, info = build(model, spec)
+    st = spec["step"]
+    if st["type"] not in ("static", "arclength"):
+        raise ValueError("바-힌지 솔버는 static 또는 arclength 스텝만 지원합니다")
+    msgs = []
+    orig = spec
+    ctl = None
+    if st["type"] == "static":
+        spec, ctl = disp_control(model, spec)
+    elif st.get("control") == "displacement":
+        msgs.append("호장법은 하중과 변위를 함께 조절하므로 변위 제어 설정은 쓰지 않았습니다")
+    n = max(1, int(st.get("increments", 25)))
     n0 = len(model.nodes)
+    imp = float(st.get("imperfection") or 0)
+    if imp > 0:
+        tr, info = build(model, orig)
+        tb = bc_table(model, orig)
+        pr = np.array([3 * i + d - 1 for (i, d) in tb if d <= 3], dtype=int)
+        fr = np.setdiff1d(np.arange(3 * len(tr.X)), pr)
+        Fb = np.zeros((len(tr.X), 3))
+        Fb[:n0] = lumped(model, orig)[0]
+        fac, mode = buckling_mode(tr, fr, Fb)
+        if mode is not None and np.abs(mode[:n0]).max() > 0:
+            model = model.copy()
+            model.nodes = model.nodes + mode[:n0] / np.abs(mode[:n0]).max() * imp
+            msgs.append(f"초기 결함: 1차 좌굴 모드(선형 좌굴 계수 {fac:.5g}) x {imp:g} mm")
+        else:
+            msgs.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다 (압축을 만드는 힘 하중이 필요합니다)")
+    tr, info = build(model, spec)
     ntot = len(tr.X)
     table = bc_table(model, spec)
     pres = []
     pval = []
-    for (n, d), v in table.items():
+    for (i, d), v in table.items():
         if d <= 3:
-            pres.append(3 * n + d - 1)
+            pres.append(3 * i + d - 1)
             pval.append(v)
     pres = np.array(pres, dtype=int)
     pval = np.array(pval, dtype=float)
@@ -378,21 +627,31 @@ def solve(model, spec, progress=None):
     F0 = np.zeros((ntot, 3))
     F, M, _ = lumped(model, spec)
     F0[:n0] = F
-    st = spec["step"]
-    n = max(1, int(st.get("increments", 25)))
-    msgs = []
     if np.abs(M).sum() > 0:
         msgs.append("바-힌지 모델에는 회전 자유도가 없어 모멘트 하중은 무시했습니다")
+    pat = None
+    cdof = np.zeros(0, dtype=int)
+    if ctl:
+        msgs += ctl["notes"]
+        if ctl["kind"] == "average":
+            fc = np.zeros((ntot, 3))
+            fc[:n0] = lumped(model, ctl["one"])[0]
+            fc = fc.ravel()
+            fc[pres] = 0.0
+            if np.abs(fc).sum() == 0:
+                raise ValueError("변위 제어 하중이 걸린 자유도가 모두 구속되어 있습니다")
+            pat = {"f": fc, "c": fc / ctl["N"], "amp": ctl["amp"]}
+        else:
+            cdof = np.array([3 * i + ctl["axis"] for i in ctl["nodes"]], dtype=int)
     if st["type"] == "arclength":
         if np.abs(F0).sum() == 0:
             raise ValueError("호장법에는 힘 하중이 필요합니다")
         if np.abs(pval).sum() > 0:
             msgs.append("호장법에서는 지정 변위를 0으로 고정했습니다")
-        frames, m2 = run_arclength(tr, free, F0, n, 1.0 / max(4, n // 4))
-    elif st["type"] in ("static",):
-        frames, m2 = run_static(tr, free, pres, pval, F0, n)
+        fr2, m2, counts = run_arclength(tr, free, F0, n, 1.0 / max(4, n // 4), st)
+        frames = [(lam, x, lam) for lam, x in fr2]
     else:
-        raise ValueError("바-힌지 솔버는 static 또는 arclength 스텝만 지원합니다")
+        frames, m2, counts = run_static(tr, free, pres, pval, F0, n, st, pat)
     msgs += m2
     if not frames:
         raise RuntimeError("바-힌지 해석이 수렴하지 않았습니다. 구속을 확인하세요\n" + "\n".join(msgs))
@@ -406,8 +665,16 @@ def solve(model, spec, progress=None):
     gnames = sorted({nm for nm in names[fold] if nm and nm != "*"})
     for nm in gnames:
         hist[f"fold.{nm}"] = []
-    for k, (lam, x) in enumerate(frames):
+    cforce = []
+    cdisp = []
+    for k, (lam, x, lamc) in enumerate(frames):
         U = x - tr.X
+        if pat is not None:
+            cforce.append(lamc * ctl["N"])
+            cdisp.append(float(pat["c"] @ U.ravel()))
+        elif ctl:
+            cforce.append(ctl["sign"] * float(tr.gradient(x).ravel()[cdof].sum()))
+            cdisp.append(lam * ctl["amp"])
         eb, ebend, efold = tr.energy(x, parts=True)
         g = tr.gradient(x)
         r = np.zeros(3)
@@ -431,9 +698,9 @@ def solve(model, spec, progress=None):
             for c in (1, 2):
                 np.add.at(rot, tr.h[fold][:, c], dth)
                 np.add.at(rc, tr.h[fold][:, c], 1)
-        res.add_frame(f"하중계수 {lam:.4g}", lam, U, {"barStrain": nodal / np.maximum(cnt, 1), "foldRotation": rot / np.maximum(rc, 1)})
+        res.add_frame(f"진행률 {lam:.4g}" if ctl else f"하중계수 {lam:.4g}", lam, U, {"barStrain": nodal / np.maximum(cnt, 1), "foldRotation": rot / np.maximum(rc, 1)})
         hist["time"].append(float(lam))
-        hist["load_factor"].append(float(lam))
+        hist["load_factor"].append(float(lamc if pat is not None else lam))
         hist["energy.bar"].append(eb)
         hist["energy.bend"].append(ebend)
         hist["energy.fold"].append(efold)
@@ -445,6 +712,8 @@ def solve(model, spec, progress=None):
         hist["fold.mean"].append(float(np.degrees(np.abs(th[fold] - np.pi)).mean()) if fold.any() else 0.0)
         for nm in gnames:
             hist[f"fold.{nm}"].append(float(np.degrees(np.abs(th[fold & (names == nm)] - np.pi)).mean()))
+    if len(counts) == len(frames):
+        hist["stability.negative"] = [float(c) for c in counts]
     res.history = hist
     tot = hist["energy.total"][-1]
     res.summary = {
@@ -458,6 +727,10 @@ def solve(model, spec, progress=None):
         "최대 바 변형률": hist["strain.max"][-1],
         "프레임 수": len(frames),
     }
+    if ctl:
+        ctl_record(res, ctl, None, cforce, cdisp)
+    if len(counts) == len(frames) and max(counts) > 0:
+        res.summary["불안정 구간"] = f"접선 강성에 음의 고유치가 있는 프레임 {sum(1 for c in counts if c > 0)}개 (하중 제어로는 유지할 수 없는 평형)"
     if msgs:
         res.summary["참고"] = msgs
     res.log = "\n".join(msgs)

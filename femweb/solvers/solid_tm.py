@@ -94,9 +94,33 @@ def stress_fields(G, E, nu, finite=False):
 def solve(model, spec, progress=None):
     if len(model.solids) == 0:
         raise ValueError("TensorMesh 솔버에는 솔리드(STL) 모델이 필요합니다")
-    st = spec["step"]
-    if st["type"] in ("buckle", "modal", "arclength"):
+    from ..control import disp_control, record as ctl_record
+
+    orig = spec
+    spec, ctl = disp_control(model, spec)
+    st = dict(spec["step"])
+    if st["type"] in ("buckle", "modal"):
         raise ValueError("TensorMesh 어댑터는 현재 정적 해석(선형, 기하비선형)만 지원합니다. 좌굴·모달은 CalculiX 솔버를 선택하세요")
+    pre_notes = []
+    if st["type"] == "arclength":
+        st["nlgeom"] = True
+        if not ctl:
+            pre_notes.append("TensorMesh 어댑터에는 호장법이 없어 하중 제어 비선형 정적 해석으로 풀었습니다. 극한점 이후 거동은 변위 제어를 켜야 따라갑니다")
+    if ctl:
+        pre_notes += ctl["notes"]
+        if not st.get("nlgeom"):
+            pre_notes.append("기하비선형이 꺼져 있어 좌굴 이후 거동은 나오지 않습니다 (선형 변위 제어)")
+    imp = float(st.get("imperfection") or 0)
+    if st.get("nlgeom") and imp > 0:
+        from . import calculix
+
+        mode = calculix.buckle_mode(model, model, orig) if calculix.find_ccx() else None
+        if mode is not None:
+            model = model.copy()
+            model.nodes = model.nodes + mode * imp
+            pre_notes.append(f"초기 결함: 1차 좌굴 모드(CalculiX로 계산) x {imp:g} mm")
+        else:
+            pre_notes.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다 (CalculiX 필요)")
     mat = spec["materials"].get(spec["sections"]["*"].get("material", "default"), spec["materials"]["default"])
     if mat.get("yield"):
         raise ValueError("TensorMesh 어댑터의 소성 해석은 아직 연결되지 않았습니다. CalculiX 솔버를 선택하세요")
@@ -142,7 +166,24 @@ def solve(model, spec, progress=None):
     hist = {k: [] for k in ("time", "u.max", "vonMises.max", "energy.total", "reaction.x", "reaction.y", "reaction.z")}
     moving = np.abs(val).sum() > 0
     rsel = (val != 0) if moving else mask
-    notes = []
+    notes = list(pre_notes)
+    cdof = np.zeros(0, dtype=int)
+    cforce = []
+    fc = None
+    cdisp = []
+    if ctl and ctl["kind"] == "rigid":
+        cn = set(ctl["nodes"])
+        ids = list(cn) + [m for (i, j), m in mids.items() if i in cn and j in cn]
+        cdof = np.array([3 * i + ctl["axis"] for i in ids if mask[3 * i + ctl["axis"]]], dtype=int)
+    elif ctl:
+        fcn = nodal_forces(model, ctl["one"], pts, t10, mids, float(mat["rho"]))[0].ravel().copy()
+        fcn[mask] = 0.0
+        if np.abs(fcn).sum() == 0:
+            raise ValueError("변위 제어 하중이 걸린 자유도가 모두 구속되어 있습니다")
+        fc = torch.tensor(fcn, dtype=dt)
+        cvec = fcn / ctl["N"]
+
+    lamc = [0.0]
 
     def record(lam, U, energy, reac, finite):
         fields = {k: v[:n0] for k, v in stress_fields(corner_gradients(pts, t10, U), E, nu, finite).items()}
@@ -152,6 +193,12 @@ def solve(model, spec, progress=None):
         hist["vonMises.max"].append(float(fields["vonMises"].max()))
         hist["energy.total"].append(float(energy))
         r = np.where(rsel, reac, 0.0).reshape(-1, 3).sum(axis=0)
+        if ctl and fc is None:
+            cforce.append(ctl["sign"] * float(np.asarray(reac)[cdof].sum()))
+            cdisp.append(float(lam) * ctl["amp"])
+        elif ctl:
+            cforce.append(float(lamc[0]) * ctl["N"])
+            cdisp.append(float(cvec @ np.asarray(U).ravel()))
         for c, nm in enumerate("xyz"):
             hist[f"reaction.{nm}"].append(float(r[c]))
 
@@ -159,8 +206,17 @@ def solve(model, spec, progress=None):
         cond = Condenser(torch.tensor(mask), torch.tensor(val, dtype=dt))
         Ki, fi = cond(K, f)
         u = cond.recover(Ki.solve(fi))
+        ftot = f
+        if fc is not None:
+            c0 = Condenser(torch.tensor(mask), torch.zeros(n * 3, dtype=dt))
+            K2, f2 = c0(K, fc)
+            u2 = c0.recover(K2.solve(f2))
+            ct = torch.tensor(cvec, dtype=dt)
+            lamc[0] = float((ctl["amp"] - ct @ u) / (ct @ u2))
+            u = u + lamc[0] * u2
+            ftot = f + lamc[0] * fc
         Ku = K @ u
-        record(1.0, u.detach().numpy().reshape(n, 3), 0.5 * float(u @ Ku), (Ku - f).detach().numpy(), False)
+        record(1.0, u.detach().numpy().reshape(n, 3), 0.5 * float(u @ Ku), (Ku - ftot).detach().numpy(), False)
     else:
         from scipy.sparse.linalg import LinearOperator, cg, splu
 
@@ -182,21 +238,28 @@ def solve(model, spec, progress=None):
         lam_done = 0.0
         step = 1.0 / inc
         cuts = 0
+        lc_done = 0.0
+        ct = torch.tensor(cvec, dtype=dt) if fc is not None else None
+        fcn_free = fc[ft].numpy() if fc is not None else None
         while lam_done < 1 - 1e-12:
             lam = min(1.0, lam_done + step)
             trial = u.clone()
             trial[torch.tensor(np.where(mask)[0])] = torch.tensor(lam * val[mask], dtype=dt)
             ok = False
             ref = None
+            lc = lc_done
             for it in range(30):
                 en, g, x = grad(trial, graph=True)
-                r = (lam * f - g.reshape(-1))[ft]
+                r = (lam * f - g.reshape(-1))[ft] if fc is None else (lam * f + lc * fc - g.reshape(-1))[ft]
                 rn = float(r.norm())
                 if not np.isfinite(rn):
                     break
+                qe = 0.0 if fc is None else lam * ctl["amp"] - float(ct @ trial)
                 if ref is None:
-                    ref = max(rn, fnorm * lam, 1e-12)
-                if rn <= 1e-6 * ref:
+                    ref = max(rn, fnorm * lam, abs(lc) * float(fc.norm()) if fc is not None else 0.0, 1e-12)
+                if fc is not None:
+                    ref = max(ref, abs(lc) * float(fc.norm()))
+                if rn <= 1e-6 * ref and abs(qe) <= 1e-8 * ctl["amp"] if fc is not None else rn <= 1e-6 * ref:
                     ok = True
                     break
 
@@ -206,7 +269,20 @@ def solve(model, spec, progress=None):
                     (h,) = torch.autograd.grad((g.reshape(-1) * w).sum(), x, retain_graph=True)
                     return h.reshape(-1)[ft].numpy()
 
-                du, _ = cg(LinearOperator((len(free), len(free)), matvec=hv), r.detach().numpy(), M=M, rtol=1e-8, maxiter=200)
+                Hop = LinearOperator((len(free), len(free)), matvec=hv)
+                du, _ = cg(Hop, r.detach().numpy(), M=M, rtol=1e-8, maxiter=200)
+                if fc is not None:
+                    dut, _ = cg(Hop, fcn_free, M=M, rtol=1e-8, maxiter=200)
+                    cf = cvec[free]
+                    den = float(cf @ dut)
+                    if abs(den) < 1e-300:
+                        break
+                    dlc = (qe - float(cf @ du)) / den
+                    t2 = trial.clone()
+                    t2[ft] += torch.tensor(du + dlc * dut, dtype=dt)
+                    trial = t2.detach()
+                    lc += dlc
+                    continue
                 s = 1.0
                 for _ in range(8):
                     t2 = trial.clone()
@@ -226,8 +302,10 @@ def solve(model, spec, progress=None):
                 continue
             u = trial.detach()
             lam_done = lam
+            lc_done = lc
+            lamc[0] = lc
             en, g, _ = grad(u)
-            record(lam, u.numpy().reshape(n, 3), float(en), (g.reshape(-1) - lam * f).detach().numpy(), True)
+            record(lam, u.numpy().reshape(n, 3), float(en), (g.reshape(-1) - lam * f - (lc * fc if fc is not None else 0.0)).detach().numpy(), True)
         if not res.frames:
             raise RuntimeError("TensorMesh 비선형 해석이 수렴하지 않았습니다")
         notes.append("기하비선형: Neo-Hookean 모델, 선형 강성을 전처리기로 쓴 Newton-CG")
@@ -241,6 +319,8 @@ def solve(model, spec, progress=None):
         "반력 합 (N)": [round(hist[f"reaction.{c}"][-1], 4) for c in "xyz"],
         "프레임 수": len(res.frames),
     }
+    if ctl:
+        ctl_record(res, ctl, None, cforce, cdisp)
     if notes:
         res.summary["참고"] = notes
     res.log = "\n".join(notes)
