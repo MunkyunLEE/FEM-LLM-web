@@ -136,7 +136,7 @@ def preview(model, spec):
     from .contact import contacts_of, describe as cdesc, view
 
     out["contacts"] = view(model, spec)
-    for c, v in zip(contacts_of(spec), out["contacts"]):
+    for c, v in zip(contacts_of(spec, True), out["contacts"]):
         v["desc"] = cdesc(c)
         if v.get("error"):
             out["errors"].append(f"{c['id']}: {v['error']}")

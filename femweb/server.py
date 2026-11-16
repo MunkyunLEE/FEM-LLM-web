@@ -328,6 +328,10 @@ def _solve_with(m, base, spec):
         from .solvers import barhinge
 
         return barhinge.solve(base, spec)
+    if spec["solver"] == "shell":
+        from .solvers import shell
+
+        return shell.solve(m, spec)
     if spec["solver"] == "tensormesh":
         from .solvers import solid_tm
 

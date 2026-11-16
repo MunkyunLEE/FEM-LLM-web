@@ -4,8 +4,8 @@ from .select import resolve
 TET_FACES = ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0))
 
 
-def contacts_of(spec):
-    return spec.get("contacts") or []
+def contacts_of(spec, with_self=False):
+    return [c for c in spec.get("contacts") or [] if with_self or c["type"] != "self"]
 
 
 def unit(v):
@@ -152,7 +152,10 @@ def plane_basis(n):
 
 def view(model, spec):
     out = []
-    for c in contacts_of(spec):
+    for c in contacts_of(spec, True):
+        if c["type"] == "self":
+            out.append({"id": c["id"], "type": "self", "friction": c.get("friction", 0.0)})
+            continue
         if c["type"] != "rigid":
             item = {"id": c["id"], "type": "pair", "friction": c.get("friction", 0.0)}
             try:
@@ -181,6 +184,8 @@ def describe(c):
         if c["shape"] == "sphere":
             return f"강체 구 R={c['radius']:g} 중심 (" + ", ".join(f"{v:g}" for v in c["center"]) + ")" + mv + mu
         return "강체 평면 점 (" + ", ".join(f"{v:g}" for v in c["point"]) + ") 법선 (" + ", ".join(f"{v:g}" for v in c["normal"]) + ")" + mv + mu
+    if c["type"] == "self":
+        return "자기 접촉 (모든 면끼리)" + mu
     from .select import describe as dsel
 
     return f"접촉 쌍 {dsel(c['a'])} ↔ {dsel(c['b'])}" + mu

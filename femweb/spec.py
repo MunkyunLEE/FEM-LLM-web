@@ -1,7 +1,8 @@
 import copy
 from .select import resolve
 
-SOLVERS = ("calculix", "barhinge", "tensormesh")
+SOLVERS = ("calculix", "barhinge", "tensormesh", "shell")
+DAMPING = ("none", "mass", "stiffness", "rayleigh", "direct")
 STEP_TYPES = ("static", "buckle", "modal", "arclength")
 BC_TYPES = {
     "fixed": [1, 2, 3, 4, 5, 6],
@@ -27,7 +28,7 @@ def default_spec(model=None):
         "bcs": [],
         "loads": [],
         "contacts": [],
-        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto"},
+        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
         "plots": [],
     }
 
@@ -73,6 +74,8 @@ def _vec(v, name):
 def apply_ops(spec, ops, model=None):
     spec = copy.deepcopy(spec)
     spec.setdefault("contacts", [])
+    spec["step"].setdefault("amplitude", "linear")
+    spec["step"].setdefault("damping", {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0})
     log = []
     for op in ops:
         if not isinstance(op, dict) or "op" not in op:
@@ -160,8 +163,11 @@ def apply_ops(spec, ops, model=None):
                     for nm in ("a", "b"):
                         if not surface(model, item[nm]):
                             raise ValueError(f"접촉 영역 {nm} 안에 요소 면이 없습니다: {item[nm]}")
+            elif t == "self":
+                if any(c["type"] == "self" for c in spec["contacts"]):
+                    raise ValueError("자기 접촉은 이미 있습니다 (마찰을 바꾸려면 수정하세요)")
             else:
-                raise ValueError("접촉 종류는 rigid 또는 pair 여야 합니다")
+                raise ValueError("접촉 종류는 rigid, pair, self 중 하나여야 합니다")
             spec["contacts"].append(item)
             if t == "rigid" and not any(s2.get("quantity") == "contact.force" for pl in spec["plots"] for s2 in pl.get("series", [])):
                 spec["plots"].append({"id": _next_id(spec["plots"], "pl"), "title": "접촉력-강체 이동량", "x": {"quantity": "contact.disp"}, "series": [{"quantity": "contact.force"}]})
@@ -285,6 +291,23 @@ def apply_ops(spec, ops, model=None):
                 st["control_kind"] = op["control_kind"]
             if "control_load" in op:
                 st["control_load"] = op["control_load"] or None
+            if "amplitude" in op:
+                if op["amplitude"] not in ("linear", "smooth"):
+                    raise ValueError("amplitude 는 linear 또는 smooth 여야 합니다")
+                st["amplitude"] = op["amplitude"]
+            if "damping" in op:
+                d = dict(st.get("damping") or {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0})
+                src = op["damping"] if isinstance(op["damping"], dict) else {"kind": op["damping"]}
+                if src.get("kind") is not None:
+                    if src["kind"] not in DAMPING:
+                        raise ValueError(f"감쇠 종류는 {DAMPING} 중 하나여야 합니다")
+                    d["kind"] = src["kind"]
+                for f in ("zeta", "alpha", "beta", "time"):
+                    if src.get(f) is not None:
+                        d[f] = max(0.0, _num(src[f], f))
+                if d["kind"] in ("mass", "stiffness", "rayleigh") and d["zeta"] <= 0:
+                    d["zeta"] = 5.0
+                st["damping"] = d
             if "branch" in op:
                 if op["branch"] not in ("auto", "primary"):
                     raise ValueError("branch 는 auto 또는 primary 여야 합니다")
@@ -335,6 +358,33 @@ def warnings_for(spec, model):
             t.update(d for d in b["dofs"] if d <= 3)
         if t != {1, 2, 3}:
             out.append("병진 자유도 중 구속되지 않은 방향이 있습니다: " + ", ".join("xyz"[d - 1] for d in (1, 2, 3) if d not in t))
+    if spec["solver"] == "shell":
+        if model.kind != "obj" or not model.shells:
+            out.append("자체 쉘 솔버에는 OBJ 쉘 패널 모델이 필요합니다")
+        if spec["step"]["type"] in ("buckle", "modal"):
+            out.append("자체 쉘 솔버는 정적 스텝만 지원합니다")
+    dk = (spec["step"].get("damping") or {}).get("kind", "none")
+    if dk != "none" and spec["solver"] != "shell":
+        out.append("감쇠 설정은 자체 쉘 솔버에서만 적용됩니다")
+    if any(c["type"] == "self" for c in spec.get("contacts") or []) and spec["solver"] != "shell":
+        out.append("자기 접촉은 자체 쉘 솔버에서만 지원합니다")
+    seen = {}
+    for b in spec["bcs"]:
+        try:
+            ids = resolve(model, b["select"])
+        except Exception:
+            continue
+        for i in ids:
+            for d in b["dofs"]:
+                key = (int(i), int(d))
+                v = float(b.get("value", 0.0))
+                if key in seen and seen[key][1] != v:
+                    out.append(f"구속 {seen[key][0]} 와 {b['id']} 가 같은 절점·자유도에 서로 다른 값을 줍니다 (나중 것이 적용됨)")
+                    break
+                seen[key] = (b["id"], v)
+            else:
+                continue
+            break
     if spec.get("contacts"):
         if spec["solver"] == "barhinge":
             out.append("바-힌지 솔버는 접촉을 지원하지 않습니다 (CalculiX 또는 TensorMesh 를 선택하세요)")

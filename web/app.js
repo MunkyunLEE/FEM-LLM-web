@@ -561,7 +561,7 @@ function renderLists() {
     const it = el('div', 'item' + (highlightId === c.id ? ' sel' : ''));
     const top = el('div', 'top');
     const nm = el('span');
-    nm.append(el('span', 'id', c.id), document.createTextNode(c.type === 'rigid' ? (c.shape === 'sphere' ? '강체 구' : '강체 평면') : '접촉 쌍'));
+    nm.append(el('span', 'id', c.id), document.createTextNode(c.type === 'rigid' ? (c.shape === 'sphere' ? '강체 구' : '강체 평면') : c.type === 'self' ? '자기 접촉' : '접촉 쌍'));
     const x = el('button', 'x', '✕');
     x.onclick = (e) => {
       e.stopPropagation();
@@ -637,6 +637,16 @@ function renderControls() {
   $('controlDisp').disabled = !dc;
   $('controlKind').disabled = !dc;
   $('branch').disabled = s.solver !== 'barhinge';
+  const dm = s.step.damping || { kind: 'none' };
+  $('dampKind').value = dm.kind === 'direct' ? 'rayleigh' : dm.kind || 'none';
+  $('dampZeta').value = dm.zeta || 0;
+  $('dampTime').value = dm.time || 0;
+  $('amplitude').value = s.step.amplitude || 'linear';
+  const own = s.solver === 'shell';
+  for (const id of ['dampKind', 'amplitude', 'addSelf']) $(id).disabled = !own;
+  $('dampZeta').disabled = !own || dm.kind === 'none';
+  $('dampTime').disabled = !own || dm.kind === 'none';
+  $('addSelf').disabled = !own || (s.contacts || []).some((c) => c.type === 'self');
   const m = s.materials.default;
   $('matE').value = m.E;
   $('matNu').value = m.nu;
@@ -1032,6 +1042,11 @@ function bind() {
   $('controlDisp').onchange = (e) => ops([{ op: 'set_step', control: 'displacement', control_disp: Math.abs(+e.target.value) || 0 }]);
   $('controlKind').onchange = (e) => ops([{ op: 'set_step', control_kind: e.target.value }]);
   $('branch').onchange = (e) => ops([{ op: 'set_step', branch: e.target.checked ? 'auto' : 'primary' }]);
+  $('dampKind').onchange = (e) => ops([{ op: 'set_step', damping: { kind: e.target.value } }]);
+  $('dampZeta').onchange = (e) => ops([{ op: 'set_step', damping: { zeta: Math.max(0, +e.target.value || 0) } }]);
+  $('dampTime').onchange = (e) => ops([{ op: 'set_step', damping: { time: Math.max(0, +e.target.value || 0) } }]);
+  $('amplitude').onchange = (e) => ops([{ op: 'set_step', amplitude: e.target.value }]);
+  $('addSelf').onclick = () => ops([{ op: 'add_contact', type: 'self', friction: 0 }]);
   $('matE').onchange = (e) => ops([{ op: 'set_material', name: 'default', E: +e.target.value }]);
   $('matNu').onchange = (e) => ops([{ op: 'set_material', name: 'default', nu: +e.target.value }]);
   $('matY').onchange = (e) => ops([{ op: 'set_material', name: 'default', yield: e.target.value === '' ? null : +e.target.value }]);

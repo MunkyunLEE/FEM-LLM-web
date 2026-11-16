@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -188,7 +190,7 @@ def _solve(H, r):
         return spla.lsqr(H, r)[0]
 
 
-def newton(sh, x, free, fext, extra=None, tol=1e-8, itmax=40):
+def newton(sh, x, free, fext, extra=None, tol=1e-8, itmax=25):
     x = x.copy()
     fscale = max(np.linalg.norm(fext[free]), 1e-12)
     info = {"iters": 0, "converged": False}
@@ -206,12 +208,15 @@ def newton(sh, x, free, fext, extra=None, tol=1e-8, itmax=40):
         return g
 
     g = resid(x)
-    ref = None
+    con = np.ones(len(x), bool)
+    con[free] = False
+    bad = 0
     for it in range(itmax):
         r = g[free]
         nr = np.linalg.norm(r)
-        if ref is None:
-            ref = max(nr, fscale, 1e-9)
+        if not np.isfinite(nr):
+            break
+        ref = max(fscale, np.linalg.norm(g[con]), 1e-9)
         info["iters"] = it
         info["res"] = nr / ref
         if nr <= max(tol * ref, sh.floor):
@@ -238,6 +243,9 @@ def newton(sh, x, free, fext, extra=None, tol=1e-8, itmax=40):
                 break
             a *= 0.5
         if not ok:
+            bad += 1
+            if bad >= 2:
+                break
             xn = x.copy()
             xn[free] += a * dx
             gn = resid(xn)
@@ -245,48 +253,66 @@ def newton(sh, x, free, fext, extra=None, tol=1e-8, itmax=40):
     return x, info
 
 
-def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_step=None, tol=1e-8):
+def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_step=None, tol=1e-8, time=1.0, maxcuts=12, x_init=None, amp=None):
     ndof = sh.ndof
-    x = sh.x0(X)
-    x0 = x.copy()
+    x = sh.x0(X) if x_init is None else x_init.copy()
+    x0 = sh.x0(X)
+    pres_dofs = np.asarray(pres_dofs, int)
     con = np.zeros(ndof, bool)
     con[np.asarray(fixed, int)] = True
-    con[np.asarray(pres_dofs, int)] = True
+    con[pres_dofs] = True
     con[sh.fixed_phi] = True
     free = np.where(~con)[0]
     hist = []
-    lam_prev = 0.0
-    k = 0
     dl = 1.0 / nsteps
     lam = 0.0
     cuts = 0
+    amp = amp or (lambda v: v)
     while lam < 1.0 - 1e-12:
         lt = min(1.0, lam + dl)
         xt = x.copy()
         if len(pres_dofs):
-            xt[pres_dofs] = x0[pres_dofs] + lt * np.asarray(pres_vals)
+            xt[pres_dofs] = x0[pres_dofs] + amp(lt) * np.asarray(pres_vals)
+        if extra is not None and hasattr(extra, "set_factor"):
+            extra.set_factor(amp(lam))
         if extra is not None and hasattr(extra, "begin"):
-            extra.begin(x)
-        xs, info = newton(sh, xt, free, fext * lt, extra=extra, tol=tol)
+            if isinstance(extra, Extras):
+                extra.begin(x, (lt - lam) * time)
+            else:
+                extra.begin(x)
+        if extra is not None and hasattr(extra, "set_factor"):
+            extra.set_factor(amp(lt))
+        if extra is not None and hasattr(extra, "fraction"):
+            a = extra.fraction(x, xt)
+            if a < 1.0:
+                lt = lam + a * (lt - lam)
+                if len(pres_dofs):
+                    xt[pres_dofs] = x0[pres_dofs] + amp(lt) * np.asarray(pres_vals)
+                extra.set_factor(amp(lt))
+        if lt - lam < 1e-12:
+            hist.append({"lam": lam, "failed": True})
+            break
+        xs, info = newton(sh, xt, free, fext * amp(lt), extra=extra, tol=tol)
         if not info["converged"]:
             cuts += 1
             dl *= 0.5
-            if cuts > 8:
+            if cuts > maxcuts:
                 hist.append({"lam": lam, "failed": True})
                 break
             continue
         cuts = 0
         x = xs
         lam = lt
-        k += 1
+        if extra is not None and hasattr(extra, "commit"):
+            extra.commit(x)
         g = sh.grad(x)
         if extra is not None:
-            g = g + extra.grad(x)
-        rec = {"lam": lam, "x": x.copy(), "reaction": g - fext * lam, "iters": info["iters"]}
+            g = g + (extra.phys_grad(x) if hasattr(extra, "phys_grad") else extra.grad(x))
+        rec = {"lam": lam, "x": x.copy(), "reaction": g - fext * amp(lam), "iters": info["iters"]}
         hist.append(rec)
         if on_step:
             on_step(rec)
-        if info["iters"] <= 5:
+        if info["iters"] <= 6:
             dl = min(dl * 1.5, 1.0 / nsteps)
     return hist
 
@@ -440,40 +466,118 @@ class SelfContact:
         return float(-self.k * np.minimum(g, 0.0).sum()), int((g < 0).sum())
 
 
-class Stabilize:
-    def __init__(self, sh, c):
-        self.sh = sh
-        self.c = c
-        self.xp = None
-        d = np.zeros(sh.ndof)
-        d[: sh.nx] = 1.0
-        self.d = d
-        self.D = sp.diags(d * c).tocsr()
+class Damping:
+    dissipative = True
 
-    def begin(self, x):
+    def __init__(self, sh, rho, alpha=0.0, beta=0.0, inertia=True, K0=None):
+        self.sh = sh
+        m = np.zeros(sh.ndof)
+        np.add.at(m, (sh.tris[:, :, None] * 3 + np.arange(3)[None, None, :]).ravel(), np.repeat(rho * sh.thick * sh.A0 / 3.0, 9))
+        self.m = m
+        self.M = sp.diags(m).tocsr()
+        self.alpha = alpha
+        self.beta = beta
+        self.inertia = inertia
+        self.K0 = K0 if K0 is not None else (sh.hess(sh.x0()) if beta else None)
+        self.C = self.M * alpha
+        if beta:
+            self.C = self.C + self.K0 * beta
+        self.vp = np.zeros(sh.ndof)
+        self.xp = None
+        self.dt = 1.0
+        self.dissipated = 0.0
+
+    def begin(self, x, dt=1.0):
         self.xp = x.copy()
+        self.dt = dt
 
     def energy(self, x):
-        v = (x - self.xp) * self.d
-        return float(0.5 * self.c * v @ v)
+        dx = x - self.xp
+        e = 0.5 / self.dt * dx @ (self.C @ dx)
+        if self.inertia:
+            r = dx - self.dt * self.vp
+            e += 0.5 / self.dt**2 * r @ (self.m * r)
+        return float(e)
 
     def grad(self, x):
-        return self.c * (x - self.xp) * self.d
+        dx = x - self.xp
+        g = self.C @ dx / self.dt
+        if self.inertia:
+            g = g + self.m * (dx - self.dt * self.vp) / self.dt**2
+        return g
 
     def hess(self, x):
-        return self.D
+        H = self.C / self.dt
+        if self.inertia:
+            H = H + self.M / self.dt**2
+        return H
 
-    def work(self, x):
-        return 2.0 * self.energy(x)
+    def commit(self, x):
+        dx = x - self.xp
+        self.dissipated += float(dx @ (self.C @ dx)) / self.dt
+        self.vp = dx / self.dt
+
+    def kinetic(self):
+        return float(0.5 * self.vp @ (self.m * self.vp))
+
+
+def frequencies(sh, rho, fixed, k=2):
+    con = np.zeros(sh.ndof, bool)
+    con[np.asarray(fixed, int)] = True
+    con[sh.fixed_phi] = True
+    fr = np.where(~con)[0]
+    d = Damping(sh, rho)
+    K = sh.hess(sh.x0())[fr][:, fr].tocsc()
+    M = d.M[fr][:, fr].tocsc()
+    vals = spla.eigsh(K, k=k, M=M, sigma=0.0, which="LM")[0]
+    return np.sqrt(np.maximum(np.sort(vals), 0.0))
+
+
+def rayleigh(zeta, w1, w2, kind="rayleigh"):
+    if kind == "mass":
+        return 2.0 * zeta * w1, 0.0
+    if kind == "stiffness":
+        return 0.0, 2.0 * zeta / w1
+    return 2.0 * zeta * w1 * w2 / (w1 + w2), 2.0 * zeta / (w1 + w2)
 
 
 class Extras:
     def __init__(self, *parts):
         self.parts = [p for p in parts if p is not None]
 
-    def begin(self, x):
+    def begin(self, x, dt=1.0):
         for p in self.parts:
-            p.begin(x)
+            if getattr(p, "dissipative", False):
+                p.begin(x, dt)
+            else:
+                p.begin(x)
+
+    def commit(self, x):
+        for p in self.parts:
+            if hasattr(p, "commit"):
+                p.commit(x)
+
+    def limit(self, x, free, dx):
+        a = 1.0
+        for p in self.parts:
+            if hasattr(p, "limit"):
+                a = min(a, p.limit(x, free, dx))
+        return a
+
+    def set_factor(self, lam):
+        for p in self.parts:
+            if hasattr(p, "set_factor"):
+                p.set_factor(lam)
+
+    def fraction(self, x0, x1):
+        a = 1.0
+        for p in self.parts:
+            if hasattr(p, "fraction"):
+                a = min(a, p.fraction(x0, x1))
+        return a
+
+    def phys_grad(self, x):
+        return sum(p.grad(x) for p in self.parts if not getattr(p, "dissipative", False))
 
     def energy(self, x):
         return sum(p.energy(x) for p in self.parts)
@@ -486,3 +590,475 @@ class Extras:
         for p in self.parts[1:]:
             H = H + p.hess(x)
         return H
+
+
+class IPCContact:
+    def __init__(self, sh, mu=0.0, dhat=None, stiffness=None, rings=1, groups=None, self_contact=True, planes=None, eps_v=None, obstacles=None):
+        import ipctk
+
+        self.ipc = ipctk
+        self.sh = sh
+        self.n = sh.n
+        obstacles = list(obstacles or [])
+        tris = sh.tris
+        Vr = sh.X.copy()
+        F = tris.copy()
+        ext = float(np.linalg.norm(sh.X.max(0) - sh.X.min(0))) * 3.0
+        for pl in planes or []:
+            o = np.asarray(pl["point"], float)
+            nn = np.asarray(pl["normal"], float)
+            nn = nn / np.linalg.norm(nn)
+            a = np.cross(nn, [1.0, 0.0, 0.0])
+            if np.linalg.norm(a) < 0.5:
+                a = np.cross(nn, [0.0, 1.0, 0.0])
+            a = a / np.linalg.norm(a)
+            b = np.cross(nn, a)
+            o = o + 0.37 * ext * a * 0.01 + 0.23 * ext * b * 0.01
+            q = np.array([o - ext * a - ext * b, o + ext * a - ext * b, o + ext * a + ext * b, o - ext * a + ext * b])
+            obstacles.append({"V": q, "F": np.array([[0, 1, 2], [0, 2, 3]]), "motion": pl.get("motion", [0.0, 0.0, 0.0])})
+        self.planes = obstacles
+        self.pl_nodes = []
+        for ob in obstacles:
+            k = len(Vr)
+            Vr = np.vstack([Vr, np.asarray(ob["V"], float)])
+            F = np.vstack([F, np.asarray(ob["F"], int) + k])
+            self.pl_nodes.append(np.arange(k, k + len(ob["V"])))
+        self.nv = len(Vr)
+        self.rest = np.asfortranarray(Vr)
+        F = np.asfortranarray(F.astype(np.int32))
+        E = ipctk.edges(F)
+        self.mesh = ipctk.CollisionMesh(self.rest, E, F)
+        tmean = float(sh.thick.mean())
+        self.dmin = tmean
+        self.dhat = 0.25 * tmean if dhat is None else float(dhat)
+        adj = [set([i]) for i in range(sh.n)]
+        for tr in tris:
+            for a_ in tr:
+                adj[int(a_)].update(int(b_) for b_ in tr)
+        base = adj
+        for _ in range(rings - 1):
+            adj = [set().union(*[base[j] for j in s_]) for s_ in adj]
+        blocked = {}
+        for i, s_ in enumerate(adj):
+            for j in s_:
+                if i < j:
+                    blocked[(i, j)] = False
+        filt = ipctk.make_sparse_filter(blocked, True)
+        gid = np.arange(self.nv, dtype=np.int32)
+        if groups is not None:
+            gid[: sh.n] = np.asarray(groups, np.int32) + self.nv
+        elif not self_contact:
+            gid[: sh.n] = self.nv
+        for k, nodes in enumerate(self.pl_nodes):
+            gid[nodes] = 2 * self.nv + 10
+        filt = filt & ipctk.make_vertex_patches_filter(gid)
+        self.mesh.can_collide = filt
+        self.kappa = 2e-3 * float(sh.E.mean()) * tmean if stiffness is None else float(stiffness)
+        self.B = ipctk.BarrierPotential(self.dhat, self.kappa, True)
+        self.mu = float(mu)
+        self.eps_v = 1e-3 * tmean if eps_v is None else eps_v
+        self.Fr = ipctk.FrictionPotential(self.eps_v)
+        self.ccd = ipctk.AdditiveCCD(10000, 0.9)
+        self.tc = None
+        self.Vp = None
+        self.lam = 0.0
+        self._key = None
+        self._col = None
+
+    def set_factor(self, lam):
+        self.lam = lam
+
+    def _V(self, x):
+        V = np.empty((self.nv, 3), order="F")
+        V[: self.n] = x[: self.sh.nx].reshape(-1, 3)
+        for pl, nodes in zip(self.planes, self.pl_nodes):
+            V[nodes] = self.rest[nodes] + self.lam * np.asarray(pl.get("motion", [0.0, 0.0, 0.0]), float)
+        return V
+
+    def _cols(self, V):
+        key = V.tobytes()
+        if key != self._key:
+            c = self.ipc.NormalCollisions()
+            c.build(self.mesh, V, self.dhat, self.dmin)
+            self._key, self._col = key, c
+        return self._col
+
+    def begin(self, x):
+        V = self._V(x)
+        self.Vp = V.copy()
+        self.tc = None
+        if self.mu > 0:
+            c = self._cols(V)
+            if len(c):
+                tc = self.ipc.TangentialCollisions()
+                tc.build(self.mesh, V, c, self.B, self.mu)
+                self.tc = tc
+
+    def energy(self, x):
+        V = self._V(x)
+        c = self._cols(V)
+        e = self.B(c, self.mesh, V) if len(c) else 0.0
+        if self.tc is not None:
+            e += self.Fr(self.tc, self.mesh, np.asfortranarray(V - self.Vp))
+        return float(e)
+
+    def _pad(self, g):
+        out = np.zeros(self.sh.ndof)
+        out[: self.sh.nx] = g[: self.sh.nx]
+        return out
+
+    def grad(self, x):
+        V = self._V(x)
+        c = self._cols(V)
+        g = np.zeros(3 * self.nv)
+        if len(c):
+            g = g + self.B.gradient(c, self.mesh, V)
+        if self.tc is not None:
+            g = g + self.Fr.gradient(self.tc, self.mesh, np.asfortranarray(V - self.Vp))
+        self._g = g
+        return self._pad(g)
+
+    def hess(self, x):
+        V = self._V(x)
+        c = self._cols(V)
+        nd = self.sh.ndof
+        H = sp.csr_matrix((3 * self.nv, 3 * self.nv))
+        if len(c):
+            H = H + self.B.hessian(c, self.mesh, V)
+        if self.tc is not None:
+            H = H + self.Fr.hessian(self.tc, self.mesh, np.asfortranarray(V - self.Vp))
+        H = sp.csr_matrix(H)[: self.sh.nx, : self.sh.nx].tocoo()
+        return sp.coo_matrix((H.data, (H.row, H.col)), shape=(nd, nd)).tocsr()
+
+    def limit(self, x, free, dx):
+        x1 = x.copy()
+        x1[free] += dx
+        a = self.ipc.compute_collision_free_stepsize(self.mesh, self._V(x), self._V(x1), self.dmin, narrow_phase_ccd=self.ccd)
+        return a
+
+    def fraction(self, x0, x1):
+        if self.Vp is None:
+            return 1.0
+        return self.ipc.compute_collision_free_stepsize(self.mesh, self.Vp, self._V(x1), self.dmin, narrow_phase_ccd=self.ccd)
+
+    def force(self, x):
+        V = self._V(x)
+        c = self._cols(V)
+        if not len(c):
+            return 0.0, 0, float("inf")
+        g = self.B.gradient(c, self.mesh, V).reshape(-1, 3)
+        return float(0.5 * np.linalg.norm(g, axis=1).sum()), len(c), float(np.sqrt(c.compute_minimum_distance(self.mesh, V)))
+
+    def plane_force(self, x, k=0):
+        V = self._V(x)
+        c = self._cols(V)
+        if not len(c):
+            return np.zeros(3)
+        g = self.B.gradient(c, self.mesh, V).reshape(-1, 3)
+        if self.tc is not None:
+            g = g + self.Fr.gradient(self.tc, self.mesh, np.asfortranarray(V - self.Vp)).reshape(-1, 3)
+        return -g[self.pl_nodes[k]].sum(0)
+
+
+def triangulate(model):
+    X = model.nodes
+    T, G = [], []
+    for f, g in zip(model.shells, model.shell_group):
+        f = [int(i) for i in f]
+        if len(f) == 3:
+            parts = [f]
+        elif len(f) == 4:
+            if np.linalg.norm(X[f[0]] - X[f[2]]) <= np.linalg.norm(X[f[1]] - X[f[3]]):
+                parts = [[f[0], f[1], f[2]], [f[0], f[2], f[3]]]
+            else:
+                parts = [[f[0], f[1], f[3]], [f[1], f[2], f[3]]]
+        else:
+            parts = [[f[0], f[i], f[i + 1]] for i in range(1, len(f) - 1)]
+        for q in parts:
+            if np.linalg.norm(np.cross(X[q[1]] - X[q[0]], X[q[2]] - X[q[0]])) > 1e-14:
+                T.append(q)
+                G.append(g)
+    return np.array(T, int), G
+
+
+def linear_buckling(sh, fixed, pres, pval, f, k=1):
+    con = np.zeros(sh.ndof, bool)
+    con[np.asarray(fixed, int)] = True
+    con[np.asarray(pres, int)] = True
+    con[sh.fixed_phi] = True
+    fr = np.where(~con)[0]
+    x0 = sh.x0()
+    K0 = sh.hess(x0)
+    u = np.zeros(sh.ndof)
+    u[pres] = pval
+    rhs = f - K0 @ u
+    u[fr] = _solve(K0[fr][:, fr], rhs[fr])
+    um = np.abs(u[: sh.nx]).max()
+    if um <= 0:
+        return None, None
+    size = float(np.linalg.norm(sh.X.max(0) - sh.X.min(0)))
+    eps = 1e-5 * size / um
+    x1, info = newton(sh, x0 + eps * u, fr, f * eps)
+    KG = (sh.hess(x1) - K0)[fr][:, fr] / eps
+    try:
+        vals, vecs = spla.eigsh(-KG.tocsc(), k=k, M=K0[fr][:, fr].tocsc(), which="LA")
+    except Exception:
+        return None, None
+    order = np.argsort(-vals)
+    out = []
+    for j in order:
+        if vals[j] <= 0:
+            continue
+        m = np.zeros(sh.ndof)
+        m[fr] = vecs[:, j]
+        m = m[: sh.nx].reshape(-1, 3)
+        out.append((1.0 / vals[j], m / np.abs(m).max()))
+    if not out:
+        return None, None
+    return [o[0] for o in out], [o[1] for o in out]
+
+
+def _vm(sh, x):
+    Em, K = sh.strains(x)
+    E = sh.E.numpy()[:, None, None]
+    nu = sh.nu.numpy()[:, None, None]
+    best = np.zeros(len(Em))
+    for sgn in (-1.0, 1.0):
+        e = Em + sgn * 0.5 * sh.thick[:, None, None] * K
+        tr = (e[:, 0, 0] + e[:, 1, 1])[:, None, None]
+        sg = E / (1 - nu**2) * ((1 - nu) * e + nu * tr * np.eye(2)[None])
+        vm = np.sqrt(np.maximum(sg[:, 0, 0] ** 2 + sg[:, 1, 1] ** 2 - sg[:, 0, 0] * sg[:, 1, 1] + 3 * sg[:, 0, 1] ** 2, 0))
+        best = np.maximum(best, vm)
+    nod = np.zeros(sh.n)
+    cnt = np.zeros(sh.n)
+    np.add.at(nod, sh.tris.ravel(), np.repeat(best, 3))
+    np.add.at(cnt, sh.tris.ravel(), 1.0)
+    return nod / np.maximum(cnt, 1.0)
+
+
+def _amp(kind):
+    if kind == "smooth":
+        return lambda s: s * s * (3.0 - 2.0 * s)
+    return lambda s: s
+
+
+def solve(model, spec, progress=None):
+    from ..contact import contacts_of, icosphere, plane_basis, unit, record as contact_record, view_spec
+    from ..control import disp_control, record as ctl_record
+    from ..loads import bc_table, lumped
+    from ..result import Result
+    from ..select import resolve
+    from ..spec import section_for
+
+    if not model.shells:
+        raise ValueError("자체 쉘 솔버에는 면(f) 패널이 필요합니다")
+    st = spec["step"]
+    if st["type"] not in ("static", "arclength"):
+        raise ValueError("자체 쉘 솔버는 정적 스텝만 지원합니다 (좌굴·모달은 CalculiX 를 쓰세요)")
+    msgs = ["자체 쉘 솔버: 삼각형 쉘 요소(막 + 모서리 회전 휨), 대변형 음해법. 기하 비선형은 항상 켜져 있습니다"]
+    if st["type"] == "arclength":
+        msgs.append("자체 쉘 솔버에는 호장법이 없어 변위·하중 증분 정적 해석으로 풀었습니다 (감쇠를 켜면 급락 구간을 지나기 쉽습니다)")
+    if model.beams:
+        msgs.append("보 요소는 자체 쉘 솔버에서 무시했습니다")
+    if any(model.hinges.values()):
+        msgs.append("핀 조인트 힌지는 자체 쉘 솔버에서 지원하지 않아 강접으로 풀었습니다")
+    orig = spec
+    spec, ctl = disp_control(model, spec)
+    if ctl and ctl["kind"] == "average":
+        s2 = copy.deepcopy(orig)
+        s2["step"]["control_kind"] = "rigid"
+        spec, ctl = disp_control(model, s2)
+        msgs.append("자체 쉘 솔버의 변위 제어는 강체 압판 방식만 지원해 그 방식으로 풀었습니다")
+    if ctl:
+        msgs += ctl["notes"]
+    T, G = triangulate(model)
+    X = model.nodes.copy()
+    used = np.zeros(len(X), bool)
+    used[T.ravel()] = True
+    secs = {g: section_for(spec, g) for g in set(G)}
+    mats = spec["materials"]
+    tt = np.array([float(secs[g]["thickness"]) for g in G])
+    mat0 = mats.get(secs[G[0]].get("material", "default"), mats["default"])
+    if any(mats.get(secs[g].get("material", "default"), mats["default"]) is not mat0 for g in G):
+        msgs.append("자체 쉘 솔버는 재료를 하나만 써서 첫 그룹의 재료로 풀었습니다")
+    if mat0.get("yield"):
+        msgs.append("자체 쉘 솔버의 소성은 아직 구현 전이라 탄성으로 풀었습니다")
+    E, nu, rho = float(mat0["E"]), float(mat0["nu"]), float(mat0.get("rho") or 0.0)
+    table = bc_table(model, spec)
+    rotn = {i for (i, d) in table if d > 3}
+    fixed, pres, pval = [], [], []
+    for (i, d), v in table.items():
+        if d <= 3 and used[i]:
+            if v == 0:
+                fixed.append(3 * i + d - 1)
+            else:
+                pres.append(3 * i + d - 1)
+                pval.append(v)
+    free_nodes = np.where(~used)[0]
+    fixed += [3 * int(i) + c for i in free_nodes for c in range(3)]
+    fixed = np.array(sorted(set(fixed)), int)
+    pres = np.array(pres, int)
+    pval = np.array(pval, float)
+    if rotn:
+        msgs.append("회전 구속이 걸린 절점을 잇는 자유 모서리는 고정단(기울기 0)으로 처리했습니다")
+    F, M, _ = lumped(model, spec)
+    if np.abs(M).sum() > 0:
+        msgs.append("모멘트 하중은 자체 쉘 솔버에서 무시했습니다")
+    imp = float(st.get("imperfection") or 0)
+    if imp > 0:
+        sh0 = Shell(X, T, E, nu, tt, clamped=rotn)
+        f0 = np.zeros(sh0.ndof)
+        f0[: sh0.nx] = lumped(model, orig)[0].ravel()
+        tb0 = bc_table(model, orig)
+        fx0 = np.array(sorted({3 * i + d - 1 for (i, d) in tb0 if d <= 3} | set(fixed.tolist())), int)
+        pv = np.zeros(0)
+        pd = np.zeros(0, int)
+        if np.abs(f0).sum() == 0 and len(pres):
+            fx0 = np.setdiff1d(fx0, pres)
+            pd, pv = pres, pval
+        fac, modes = linear_buckling(sh0, fx0, pd, pv, f0, k=1)
+        if modes:
+            X = X + imp * modes[0]
+            msgs.append(f"초기 결함: 1차 좌굴 모드(선형 좌굴 계수 {fac[0]:.5g}) x {imp:g} mm")
+        else:
+            msgs.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다")
+    sh = Shell(X, T, E, nu, tt, clamped=rotn)
+    fext = np.zeros(sh.ndof)
+    fext[: sh.nx] = F.ravel()
+    fext[fixed] = 0.0
+    n = max(1, int(st.get("increments", 25)))
+    parts = []
+    cs = contacts_of(spec, True)
+    ipc = None
+    rigid_ids = []
+    if cs:
+        tmean = float(tt.mean())
+        dhat = 0.25 * tmean
+        obstacles = []
+        groups = None
+        selfc = any(c["type"] == "self" for c in cs)
+        for c in cs:
+            if c["type"] == "rigid":
+                off = 0.5 * tmean + dhat
+                mv = np.asarray(c.get("motion", [0, 0, 0]), float)
+                if c["shape"] == "plane":
+                    t1, t2, nn = plane_basis(c["normal"])
+                    o = np.asarray(c["point"], float) - nn * off
+                    ext = model.diag() * 3.0
+                    o = o + 0.0037 * ext * t1 + 0.0023 * ext * t2
+                    q = np.array([o - ext * t1 - ext * t2, o + ext * t1 - ext * t2, o + ext * t1 + ext * t2, o - ext * t1 + ext * t2])
+                    obstacles.append({"V": q, "F": np.array([[0, 1, 2], [0, 2, 3]]), "motion": mv})
+                else:
+                    v, f = icosphere(3)
+                    r = max(float(c["radius"]) - off, 1e-6)
+                    obstacles.append({"V": np.asarray(c["center"], float) + r * v, "F": f, "motion": mv})
+                rigid_ids.append(c["id"])
+            elif c["type"] == "pair" and not selfc:
+                if groups is None:
+                    groups = np.zeros(len(X), int)
+                    nxt = 1
+                for nm in ("a", "b"):
+                    ids = resolve(model, c[nm])
+                    groups[ids] = nxt
+                    nxt += 1
+        mu = max(float(c.get("friction") or 0.0) for c in cs)
+        if len({float(c.get("friction") or 0.0) for c in cs}) > 1:
+            msgs.append(f"접촉마다 마찰계수가 달라 가장 큰 값 {mu:g} 을 모두에 적용했습니다")
+        only_rigid = not selfc and groups is None
+        ipc = IPCContact(sh, mu=mu, dhat=dhat, groups=groups, self_contact=not only_rigid, obstacles=obstacles)
+        parts.append(ipc)
+        msgs.append(f"접촉: IPC 장벽법(ipctk), 최소 간격 = 두께 {tmean:g} mm, 장벽 범위 {dhat:g} mm" + (", 자기 접촉 포함" if selfc else "") + (f", 마찰 {mu:g}" if mu > 0 else ""))
+        if rigid_ids:
+            msgs.append(f"강체 면은 장벽 범위만큼 물러난 위치에서 시작하므로 접촉이 약 {dhat:g} mm 늦게 시작합니다")
+    dmp = None
+    dspec = st.get("damping") or {}
+    kind = dspec.get("kind", "none")
+    total_time = 1.0
+    if kind != "none":
+        if rho <= 0:
+            raise ValueError("감쇠를 쓰려면 재료 밀도가 필요합니다")
+        allc = np.concatenate([fixed, pres]).astype(int)
+        w = frequencies(sh, rho, allc, k=2)
+        if kind == "direct":
+            al, be = float(dspec.get("alpha") or 0.0), float(dspec.get("beta") or 0.0)
+        else:
+            al, be = rayleigh(float(dspec.get("zeta") or 0.0) / 100.0, w[0], w[1], kind)
+        total_time = float(dspec.get("time") or 0.0)
+        auto_t = total_time <= 0
+        if auto_t:
+            total_time = 100.0 * 2 * np.pi / w[0]
+        dmp = Damping(sh, rho, al, be, inertia=bool(dspec.get("inertia", True)))
+        parts.append(dmp)
+        msgs.append(f"감쇠({ {'mass': '질량 비례', 'stiffness': '강성 비례', 'rayleigh': '레일리', 'direct': '직접 입력'}[kind] }): 1·2차 고유진동수 {w[0] / 2 / np.pi:.4g}, {w[1] / 2 / np.pi:.4g} Hz, α = {al:.4g} 1/s, β = {be:.4g} s, 스텝 시간 {total_time:.4g} s" + (" (자동: 1차 주기의 100배)" if auto_t else "") + ". 음해법 후방 오일러 시간 적분")
+    extra = Extras(*parts) if parts else None
+    amp = _amp(st.get("amplitude", "linear"))
+    res = Result("shell", "static")
+    res.nodes = X.copy()
+    res.tris = T
+    names = ("time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "stress.max", "energy.strain", "energy.damping", "energy.kinetic", "contact.count", "contact.gap")
+    hist = {k: [] for k in names}
+    cforce, cdisp, rig = [], [], {i: [] for i in rigid_ids}
+    cdof = np.array([3 * i + ctl["axis"] for i in ctl["nodes"]], int) if ctl else np.zeros(0, int)
+    moving = np.concatenate([fixed, pres]).astype(int)
+    if len(pres):
+        moving = pres
+
+    def on_step(r):
+        lam = r["lam"]
+        x = r["x"]
+        U = x[: sh.nx].reshape(-1, 3) - X
+        vm = _vm(sh, x)
+        res.add_frame(f"진행률 {lam:.4g}", lam, U, {"vonMises": vm})
+        hist["time"].append(float(lam))
+        hist["load_factor"].append(float(lam))
+        g = r["reaction"]
+        for c, nm in enumerate("xyz"):
+            hist[f"reaction.{nm}"].append(float(g[moving[moving % 3 == c]].sum()))
+        hist["u.max"].append(float(np.linalg.norm(U, axis=1).max()))
+        hist["stress.max"].append(float(vm.max()))
+        hist["energy.strain"].append(sh.energy(x))
+        hist["energy.damping"].append(dmp.dissipated if dmp else 0.0)
+        hist["energy.kinetic"].append(dmp.kinetic() if dmp else 0.0)
+        if ipc is not None:
+            _, cnt, gap = ipc.force(x)
+            hist["contact.count"].append(float(cnt))
+            hist["contact.gap"].append(float(gap) if np.isfinite(gap) else 0.0)
+            for k, cid in enumerate(rigid_ids):
+                rig[cid].append((-ipc.plane_force(x, k)).tolist())
+        else:
+            hist["contact.count"].append(0.0)
+            hist["contact.gap"].append(0.0)
+        if ctl:
+            cforce.append(ctl["sign"] * float(g[cdof].sum()))
+            cdisp.append(lam * ctl["amp"])
+        if progress:
+            progress(lam)
+
+    h = run_static(sh, X, fixed, pres, pval, fext, n, extra=extra, on_step=on_step, time=total_time, amp=amp)
+    if not res.frames:
+        raise RuntimeError("자체 쉘 해석이 첫 증분에서 수렴하지 않았습니다. 구속과 하중을 확인하세요\n" + "\n".join(msgs))
+    if h and h[-1].get("failed"):
+        msgs.append(f"진행률 {h[-1]['lam']:.4g} 에서 수렴하지 못해 그 직전까지의 결과만 담았습니다. 증분 수를 늘리거나 감쇠를 켜 보세요")
+    res.history = hist
+    res.summary = {
+        "절점 수": int(used.sum()),
+        "삼각형 요소 수": int(len(T)),
+        "최대 변위 (mm)": hist["u.max"][-1],
+        "최대 von Mises 응력 (MPa, 표면)": hist["stress.max"][-1],
+        "변형 에너지 (N·mm)": hist["energy.strain"][-1],
+        "프레임 수": len(res.frames),
+    }
+    if dmp:
+        ratio = dmp.dissipated / max(hist["energy.strain"][-1], 1e-30)
+        res.summary["감쇠 소산 에너지 (N·mm)"] = dmp.dissipated
+        res.summary["감쇠 소산 / 변형 에너지"] = round(ratio, 5)
+        msgs.append(f"감쇠가 소산한 에너지는 변형 에너지의 {100 * ratio:.3g}% 입니다" + (". 5%를 넘으면 감쇠가 결과에 영향을 주므로 스텝 시간을 늘리거나 감쇠비를 줄이세요" if ratio > 0.05 else ""))
+    if ipc is not None:
+        res.summary["접촉 쌍 수 (끝)"] = int(hist["contact.count"][-1])
+        if rigid_ids:
+            contact_record(res, spec, hist["time"], rig)
+    if ctl:
+        ctl_record(res, ctl, None, cforce, cdisp)
+    res.summary["참고"] = msgs
+    res.log = "\n".join(msgs)
+    return res
