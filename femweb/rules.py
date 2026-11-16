@@ -560,6 +560,7 @@ def parse_contact(c, model, spec):
         if not cts:
             return [], ["삭제할 접촉이 없습니다"], [], [], {}
         return [{"op": "clear", "what": "contacts"}], [], [], c.leftover(), {}
+    selfc = bool(c.take(r"자기\s*접촉|자체\s*접촉|셀프\s*접촉|self\s*-?\s*contact"))
     mu = None
     if c.take(r"마찰\s*(?:이|은|는)?\s*없(?:이|는|음|게)|무마찰|frictionless|no friction|without friction"):
         mu = 0.0
@@ -567,6 +568,12 @@ def parse_contact(c, model, spec):
         m = c.take(r"(?:마찰\s*계수|마찰|friction(?:\s*coefficient)?|(?<![a-z])mu(?![a-z])|μ)\s*(?:는|은|=|를|을|이|가|:)?\s*" + NUM)
         if m:
             mu = _f(m)
+    if selfc:
+        c.takeall(r"접촉|contacts?|추가|넣어|설정|켜|적용|해\s*줘|해\s*라|줘|모든|면끼리|포함|조건|으로|로|를|을|도")
+        old = next((x for x in cts if x["type"] == "self"), None)
+        if old:
+            return [{"op": "update", "id": old["id"], "friction": mu if mu is not None else old.get("friction", 0.0)}], [], [], c.leftover(), {}
+        return [{"op": "add_contact", "type": "self", "friction": mu or 0.0}], [], [], c.leftover(), {}
     rad = None
     m = c.take(r"(?:반지름|반경|radius|(?<![a-z])r)\s*(?:=|이|가|은|는|:)?\s*" + NUM + r"\s*(mm|cm|m)?(?![a-z])")
     if m:
@@ -693,7 +700,7 @@ def parse_clause(text, model, spec, ctx):
     if re.search(r"(?:해석|계산|시뮬레이션|simulation)\s*(?:을|를|도)?\s*(?:실행|돌려|돌리|시작|수행|해\s*줘|해\s*봐|해\s*라|하자|ㄱㄱ|고고|go)|(?:^|\s)(?:run|solve)(?![a-z])|^\s*(?:돌려|실행)(?:해)?\s*(?:줘|봐)?\s*$|풀어\s*(?:줘|봐)", t):
         flags["run"] = True
 
-    for pat, name in ((r"calculix|ccx|칼큘릭스|캘큘릭스", "calculix"), (r"바\s*-?\s*힌지|bar\s*-?\s*(?:and\s*-?\s*)?hinge|barhinge", "barhinge"), (r"tensor\s*mesh|텐서\s*메쉬|텐서\s*메시", "tensormesh")):
+    for pat, name in ((r"calculix|ccx|칼큘릭스|캘큘릭스", "calculix"), (r"바\s*-?\s*힌지|bar\s*-?\s*(?:and\s*-?\s*)?hinge|barhinge", "barhinge"), (r"tensor\s*mesh|텐서\s*메쉬|텐서\s*메시", "tensormesh"), (r"자체\s*쉘|자체\s*셸|쉘\s*솔버|셸\s*솔버|own\s*shell|shell\s*solver", "shell")):
         if c.has(pat) and c.has(r"솔버|solver|모델로|로\s*(?:풀|해석|바꿔|변경|계산)|사용|쓰자|써\s*줘|써서|use|switch|으로\s*(?:풀|해석|바꿔|변경|계산)") and not (name == "barhinge" and c.has(r"강성|kappa|핀|조인트")):
             c.take(pat)
             c.takeall(r"솔버|solver|모델로|사용|쓰자|써\s*줘|써서|switch|풀어|풀자|계산")
@@ -747,6 +754,29 @@ def parse_clause(text, model, spec, ctx):
     elif c.take(r"하중\s*분포\s*(?:를)?\s*유지|평균\s*변위|분포\s*유지"):
         st["control_kind"] = "average"
         st.setdefault("control", "displacement")
+    if c.has(r"감쇠|댐핑|damping|레일리|rayleigh"):
+        dm = {}
+        if c.take(r"(?:감쇠|댐핑|damping)\s*(?:를|을|는|은)?\s*(?:없이|없애|끄|꺼|해제|off|0\s*(?:으로|로)?(?![.\d]))|no damping|without damping"):
+            dm["kind"] = "none"
+        else:
+            if c.take(r"레일리|rayleigh"):
+                dm["kind"] = "rayleigh"
+            elif c.take(r"질량\s*(?:비례)?|mass(?:\s*proportional)?"):
+                dm["kind"] = "mass"
+            elif c.take(r"강성\s*(?:비례)?|stiffness(?:\s*proportional)?"):
+                dm["kind"] = "stiffness"
+            else:
+                dm["kind"] = "rayleigh"
+            m = c.take(NUM + r"\s*(?:%|퍼센트|퍼|percent)")
+            if m:
+                dm["zeta"] = _f(m)
+            m = c.take(r"(?:스텝\s*)?시간\s*(?:은|는|을|를|=)?\s*" + NUM + r"\s*(?:s|초)(?![a-z])")
+            if m:
+                dm["time"] = _f(m)
+        c.takeall(r"감쇠비?|댐핑|damping|비례|1\s*[,·]?\s*2\s*차|모드|기준|에\s*대해|추가|넣어|설정|적용|켜")
+        st["damping"] = dm
+    if c.take(r"부드럽게\s*(?:증가|올려|가해)?|S\s*자\s*(?:곡선)?|smooth\s*step|smooth(?:ly)?"):
+        st["amplitude"] = "smooth"
     if c.take(r"분기\s*(?:점)?\s*(?:전환|추적|감지|회피)?|가지\s*전환|branch\s*switch(?:ing)?|bifurcation"):
         st["branch"] = "primary" if c.take(r"끄|꺼|off|해제|없이|말고|제외|disable|without|하지\s*마|주\s*경로") else "auto"
         c.takeall(r"켜(?:고|서)?|적용|사용")
@@ -1263,6 +1293,8 @@ def describe_op(o):
         return {"bcs": "구속 전체 삭제", "loads": "하중 전체 삭제", "plots": "그래프 전체 삭제", "contacts": "접촉 전체 삭제", "all": "조건 전체 삭제"}[o.get("what", "all")]
     if k == "add_contact":
         mu = f", 마찰 {o.get('friction', 0):g}"
+        if o.get("type") == "self":
+            return f"자기 접촉 추가{mu}"
         if o.get("type") == "pair":
             return f"접촉 쌍 추가: {o['a'].get('group', '영역 a')} ↔ {o['b'].get('group', '영역 b')}{mu}"
         mv = ", 이동 [" + ", ".join(f"{v:g}" for v in o.get("motion", [0, 0, 0])) + "] mm"
@@ -1309,6 +1341,12 @@ def describe_op(o):
             s.append("강체 압판" if o["control_kind"] == "rigid" else "하중 분포 유지")
         if "branch" in o:
             s.append("분기 전환 " + ("켬" if o["branch"] == "auto" else "끔"))
+        if "damping" in o:
+            d = o["damping"]
+            nm = {"none": "감쇠 없음", "mass": "질량 비례 감쇠", "stiffness": "강성 비례 감쇠", "rayleigh": "레일리 감쇠", "direct": "감쇠 직접 입력"}.get(d.get("kind"), "감쇠")
+            s.append(nm + (f" {d['zeta']:g}%" if d.get("zeta") else "") + (f", 스텝 시간 {d['time']:g} s" if d.get("time") else ""))
+        if o.get("amplitude"):
+            s.append("증가 곡선 " + ("S자" if o["amplitude"] == "smooth" else "선형"))
         return "해석 설정: " + ", ".join(s)
     if k == "set_solver":
         return f"솔버: {o['solver']}"

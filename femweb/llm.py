@@ -88,7 +88,9 @@ OPS:
  {"op":"set_hinge","group":"*"|"<hinge group>","kappa":N*mm/rad/mm|null,"ratio":number,"pin":bool}   pin=true is a pin joint (free rotation)
  {"op":"auto_hinge","mode":"auto"|"groups"|"crease"|"all"|"off","angle":deg}   turn shell-to-shell shared edges into hinges (auto = group boundaries + creases)
  {"op":"set_step","type":"static"|"buckle"|"modal"|"arclength","nlgeom":bool,"increments":int,"modes":int,"imperfection":mm,"control":"load"|"displacement","control_disp":mm,"control_load":"ld1","control_kind":"average"|"rigid","branch":"auto"|"primary"}   control=displacement follows post-buckling/snap-through by controlling the displacement under the chosen load (average keeps the load distribution, rigid pushes the loaded nodes equally); imperfection adds the first buckling mode as initial shape error
- {"op":"set_solver","solver":"calculix"|"barhinge"|"tensormesh"}
+ {"op":"set_solver","solver":"calculix"|"barhinge"|"tensormesh"|"shell"}   shell = own large-deformation shell solver (OBJ panels, static only); the only one with self-contact and damping
+ {"op":"add_contact","type":"self","friction":mu}   self-contact between all shell faces (solver shell only)
+ {"op":"set_step","damping":{"kind":"none"|"mass"|"stiffness"|"rayleigh","zeta":percent,"time":seconds},"amplitude":"linear"|"smooth"}   damping ratio at modes 1 and 2 (solver shell only); time 0 = automatic
  {"op":"set_divisions","divisions":int}
  {"op":"add_plot","title":str,"x":QUANTITY,"series":[QUANTITY,...]}
 QUANTITY: {"quantity": "time"|"frame"|"energy.total"|"energy.bar"|"energy.bend"|"energy.fold"|"reaction.x"|"reaction.y"|"reaction.z"|"u.max"|"vonMises.max"|"fold.mean"|"buckling.factor"|"frequency"|"control.disp"|"control.force"|"contact.disp"|"contact.force"}

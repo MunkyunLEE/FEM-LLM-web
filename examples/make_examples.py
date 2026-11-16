@@ -33,6 +33,22 @@ def shell_panel(a=200.0, n=10):
             p = j * (n + 1) + i + 1
             out.append(f"f {p} {p + 1} {p + n + 2} {p + n + 1}")
     write("shell_panel.obj", "\n".join(out) + "\n")
+    a, L, npa, nz = 40.0, 120.0, 6, 18
+    ring = []
+    for side in range(4):
+        for i in range(npa):
+            q = a * i / npa
+            ring.append([(q, 0.0), (a, q), (a - q, a), (0.0, a - q)][side])
+    m = len(ring)
+    out = ["# square tube 40x40x120"]
+    for k in range(nz + 1):
+        for x, y in ring:
+            out.append(f"v {x:g} {y:g} {L * k / nz:g}")
+    for k in range(nz):
+        for i in range(m):
+            p0, q0 = k * m + i, k * m + (i + 1) % m
+            out.append(f"f {p0 + 1} {q0 + 1} {q0 + m + 1} {p0 + m + 1}")
+    write("square_tube.obj", "\n".join(out) + "\n")
 
 
 def cylinder_shell(R=50.0, L=200.0, nc=48, na=40):
@@ -259,6 +275,22 @@ PRESETS = {
             {"op": "add_bc", "name": "윗면 y 구속", "dofs": [2], "select": {"plane": {"axis": "z", "at": "max"}}},
             {"op": "set_step", "type": "static", "increments": 4},
             {"op": "add_contact", "type": "pair", "a": {"group": "body_2"}, "b": {"group": "body_1"}, "friction": 0.3},
+        ],
+    },
+    "tube_crush": {
+        "title": "7c. 사각관 축방향 압축 (자체 쉘, 자기 접촉, 감쇠)",
+        "file": "square_tube.obj",
+        "note": "40x40x120 알루미늄 사각관(t=1, 탄성)을 강체 압판 변위 제어로 20 mm 누릅니다. 자체 쉘 솔버 + 자기 접촉(IPC, 마찰 0.2) + 레일리 감쇠 2%. 1차 좌굴 모드 0.2 mm 초기 결함. 평판 좌굴 이론 응력은 약 158 MPa(하중 25 kN)이고 이 성긴 메쉬는 그보다 낮게 나옵니다",
+        "prompts": ["자체 쉘 솔버로", "아래 고정, 위는 x y 구속", "위에 -z 1000 N", "변위제어 20 mm 강체 압판, 초기결함 0.2", "자기 접촉 추가 마찰 0.2", "레일리 감쇠 2%", "해석 실행"],
+        "ops": [
+            {"op": "set_solver", "solver": "shell"},
+            {"op": "set_material", "name": "default", "E": 70000.0, "nu": 0.3, "rho": 2.7e-9},
+            {"op": "set_section", "group": "*", "thickness": 1.0},
+            {"op": "add_bc", "name": "아래 고정", "dofs": [1, 2, 3], "select": {"plane": {"axis": "z", "at": "min"}}},
+            {"op": "add_bc", "name": "위 x y 구속", "dofs": [1, 2], "select": {"plane": {"axis": "z", "at": "max"}}},
+            {"op": "add_load", "type": "force", "name": "축 압축", "vector": [0, 0, -1000.0], "select": {"plane": {"axis": "z", "at": "max"}}},
+            {"op": "set_step", "type": "static", "increments": 40, "imperfection": 0.2, "control": "displacement", "control_disp": 20.0, "control_kind": "rigid", "damping": {"kind": "rayleigh", "zeta": 2.0}},
+            {"op": "add_contact", "type": "self", "friction": 0.2},
         ],
     },
     "cantilever_solid": {

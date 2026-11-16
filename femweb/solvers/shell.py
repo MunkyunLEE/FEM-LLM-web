@@ -352,120 +352,6 @@ def tube(a, L, npa, nz):
     return X, np.array(T)
 
 
-class SelfContact:
-    def __init__(self, sh, stiffness=None, ring=1, margin=None):
-        from scipy.spatial import cKDTree
-
-        self.sh = sh
-        self.tree = cKDTree
-        tris = sh.tris
-        nt = np.zeros(sh.n)
-        cnt = np.zeros(sh.n)
-        np.add.at(nt, tris.ravel(), np.repeat(sh.thick, 3))
-        np.add.at(cnt, tris.ravel(), 1.0)
-        self.tn = nt / np.maximum(cnt, 1.0)
-        adj = [set([i]) for i in range(sh.n)]
-        for tr in tris:
-            for a in tr:
-                adj[int(a)].update(int(b) for b in tr)
-        for _ in range(ring - 1):
-            adj = [set().union(*[adj[j] for j in s]) for s in adj]
-        self.adj = adj
-        P = sh.X[tris]
-        self.rad = float(np.linalg.norm(P - P.mean(1, keepdims=True), axis=2).max())
-        self.hmax = float(sh.thick.max())
-        self.margin = self.hmax * 2.0 if margin is None else margin
-        self.k = float(sh.E.mean()) * float(sh.thick.mean()) if stiffness is None else stiffness
-        self.pn = np.zeros(0, int)
-        self.pt = np.zeros(0, int)
-        self.s0 = np.zeros(0)
-
-    def begin(self, x):
-        sh = self.sh
-        xx = x[: sh.nx].reshape(-1, 3)
-        cen = xx[sh.tris].mean(1)
-        tree = self.tree(cen)
-        lst = tree.query_ball_point(xx, self.rad + self.hmax + self.margin)
-        pn, pt = [], []
-        for i, cand in enumerate(lst):
-            ad = self.adj[i]
-            for e in cand:
-                tr = sh.tris[e]
-                if int(tr[0]) in ad or int(tr[1]) in ad or int(tr[2]) in ad:
-                    continue
-                pn.append(i)
-                pt.append(e)
-        self.pn = np.array(pn, int)
-        self.pt = np.array(pt, int)
-        if len(pn):
-            v, nrm, _, _ = self._geom(xx)
-            self.s0 = np.where((v * nrm).sum(1) >= 0, 1.0, -1.0)
-        else:
-            self.s0 = np.zeros(0)
-
-    def _geom(self, xx):
-        from ..contact import _closest
-
-        tr = self.sh.tris[self.pt]
-        a, b, c = xx[tr[:, 0]], xx[tr[:, 1]], xx[tr[:, 2]]
-        p = xx[self.pn]
-        out = _closest(p, a, b, c)
-        bw = out[-1] if out[-1].shape[-1] == 3 and out[-1].ndim == 2 else out[1]
-        q = bw[:, :1] * a + bw[:, 1:2] * b + bw[:, 2:3] * c
-        nrm = np.cross(b - a, c - a)
-        nrm /= np.linalg.norm(nrm, axis=1)[:, None]
-        return p - q, nrm, bw, tr
-
-    def _gap(self, x):
-        sh = self.sh
-        xx = x[: sh.nx].reshape(-1, 3)
-        v, nrm, bw, tr = self._geom(xx)
-        d = np.linalg.norm(v, axis=1)
-        side = np.where((v * nrm).sum(1) >= 0, 1.0, -1.0)
-        same = side == self.s0
-        dirn = np.where(d[:, None] > 1e-12, v / np.maximum(d, 1e-12)[:, None], nrm * self.s0[:, None])
-        dirn = np.where(same[:, None], dirn, -dirn)
-        h = 0.5 * (self.tn[self.pn] + sh.thick[self.pt])
-        g = np.where(same, d, -d) - h
-        return g, dirn, bw, tr
-
-    def energy(self, x):
-        if not len(self.pn):
-            return 0.0
-        g = self._gap(x)[0]
-        return float(0.5 * self.k * (np.minimum(g, 0.0) ** 2).sum())
-
-    def _vec(self, x):
-        g, dirn, bw, tr = self._gap(x)
-        act = g < 0
-        g, dirn, bw, tr, pn = g[act], dirn[act], bw[act], tr[act], self.pn[act]
-        nodes = np.column_stack([pn, tr])
-        coef = np.column_stack([np.ones(len(g)), -bw])
-        V = coef[:, :, None] * dirn[:, None, :]
-        dof = nodes[:, :, None] * 3 + np.arange(3)[None, None, :]
-        return g, V.reshape(len(g), 12), dof.reshape(len(g), 12)
-
-    def grad(self, x):
-        out = np.zeros(self.sh.ndof)
-        if not len(self.pn):
-            return out
-        g, V, dof = self._vec(x)
-        np.add.at(out, dof.ravel(), (self.k * g[:, None] * V).ravel())
-        return out
-
-    def hess(self, x):
-        n = self.sh.ndof
-        if not len(self.pn):
-            return sp.csr_matrix((n, n))
-        g, V, dof = self._vec(x)
-        h = self.k * V[:, :, None] * V[:, None, :]
-        return sp.coo_matrix((h.ravel(), (np.repeat(dof, 12, axis=1).ravel(), np.tile(dof, (1, 12)).ravel())), shape=(n, n)).tocsr()
-
-    def force(self, x):
-        g = self._gap(x)[0] if len(self.pn) else np.zeros(0)
-        return float(-self.k * np.minimum(g, 0.0).sum()), int((g < 0).sum())
-
-
 class Damping:
     dissipative = True
 
@@ -995,7 +881,7 @@ def solve(model, spec, progress=None):
     res = Result("shell", "static")
     res.nodes = X.copy()
     res.tris = T
-    names = ("time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "stress.max", "energy.strain", "energy.damping", "energy.kinetic", "contact.count", "contact.gap")
+    names = ("time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "vonMises.max", "energy.strain", "energy.damping", "energy.kinetic", "contact.count", "contact.gap")
     hist = {k: [] for k in names}
     cforce, cdisp, rig = [], [], {i: [] for i in rigid_ids}
     cdof = np.array([3 * i + ctl["axis"] for i in ctl["nodes"]], int) if ctl else np.zeros(0, int)
@@ -1015,7 +901,7 @@ def solve(model, spec, progress=None):
         for c, nm in enumerate("xyz"):
             hist[f"reaction.{nm}"].append(float(g[moving[moving % 3 == c]].sum()))
         hist["u.max"].append(float(np.linalg.norm(U, axis=1).max()))
-        hist["stress.max"].append(float(vm.max()))
+        hist["vonMises.max"].append(float(vm.max()))
         hist["energy.strain"].append(sh.energy(x))
         hist["energy.damping"].append(dmp.dissipated if dmp else 0.0)
         hist["energy.kinetic"].append(dmp.kinetic() if dmp else 0.0)
@@ -1044,7 +930,7 @@ def solve(model, spec, progress=None):
         "절점 수": int(used.sum()),
         "삼각형 요소 수": int(len(T)),
         "최대 변위 (mm)": hist["u.max"][-1],
-        "최대 von Mises 응력 (MPa, 표면)": hist["stress.max"][-1],
+        "최대 von Mises 응력 (MPa, 표면)": hist["vonMises.max"][-1],
         "변형 에너지 (N·mm)": hist["energy.strain"][-1],
         "프레임 수": len(res.frames),
     }
