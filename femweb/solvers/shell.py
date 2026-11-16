@@ -61,6 +61,47 @@ _vS = vmap(_strains)
 _vA = vmap(_angles)
 
 
+def _bcross(a, b):
+    return torch.linalg.cross(a, b, dim=-1)
+
+
+def _bdot(a, b):
+    return (a * b).sum(-1)
+
+
+def _bangle(n, pj, pk, q):
+    e = pk - pj
+    m = _bcross(pj - pk, q - pk)
+    s = _bdot(_bcross(n, m), e) / torch.linalg.norm(e, dim=-1)
+    return torch.atan2(s, _bdot(n, m))
+
+
+def _benergy(u, Dmi, A0, B, R, kind, th0, w, sg, E, nu, t):
+    p = u[:, :18].reshape(-1, 6, 3)
+    phi = u[:, 18:]
+    ys = []
+    for i in range(3):
+        j, k = (i + 1) % 3, (i + 2) % 3
+        free = p[:, j] + p[:, k] - p[:, i]
+        cl = p[:, j] + torch.einsum("eab,eb->ea", R[:, i], p[:, i] - p[:, j])
+        ki = kind[:, i][:, None]
+        ys.append(torch.where(ki == 0, p[:, 3 + i], torch.where(ki == 1, free, cl)))
+    n = _bcross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
+    ang = torch.stack([_bangle(n, p[:, 1], p[:, 2], ys[0]), _bangle(n, p[:, 2], p[:, 0], ys[1]), _bangle(n, p[:, 0], p[:, 1], ys[2])], dim=1)
+    da = ang - th0
+    dth = torch.atan2(torch.sin(da), torch.cos(da)) * w + 2.0 * sg * phi
+    K = (dth[:, :, None, None] * B).sum(1)
+    Ds = torch.stack([p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]], dim=2)
+    F = Ds @ Dmi
+    Em = 0.5 * (F.transpose(1, 2) @ F - torch.eye(2))
+
+    def quad(e):
+        return (1.0 - nu) * (e * e).sum((1, 2)) + nu * (e[:, 0, 0] + e[:, 1, 1]) ** 2
+
+    c = E / (1.0 - nu * nu)
+    return A0 * c * (0.5 * t * quad(Em) + t**3 / 24.0 * quad(K))
+
+
 class Shell:
     def __init__(self, X, tris, E, nu, t, clamped=None):
         X = np.asarray(X, float)
@@ -149,6 +190,7 @@ class Shell:
         self.rows = np.repeat(dof, 21, axis=1).ravel()
         self.cols = np.tile(dof, (1, 21)).ravel()
         self.th0 = _vA(tt(X[np.hstack([tris, opp])]), self.R, self.kind)
+        self._cache = None
         self.floor = 1e-13 * float(E) * float(np.mean(self.thick)) * float(np.sqrt(self.A0.mean())) * np.sqrt(self.ndof)
 
     def x0(self, X=None):
@@ -161,16 +203,33 @@ class Shell:
         return (u, self.Dmi, self.tA0, self.B, self.R, self.kind, self.th0, self.w, self.sg, self.E, self.nu, self.t)
 
     def energy(self, x):
-        return float(_vE(*self._args(x)).sum())
+        with torch.no_grad():
+            return float(_benergy(*self._args(x)).sum())
+
+    def _gh(self, x, second):
+        key = np.asarray(x, float).tobytes()
+        c = self._cache
+        if c is not None and c[0] == key and (c[2] is not None or not second):
+            return c[1], c[2]
+        args = self._args(x)
+        u = args[0].clone().requires_grad_(True)
+        e = _benergy(u, *args[1:])
+        g = torch.autograd.grad(e.sum(), u, create_graph=second)[0]
+        H = None
+        if second:
+            H = torch.stack([torch.autograd.grad(g[:, i].sum(), u, retain_graph=True)[0] for i in range(21)], 1).numpy()
+        g = g.detach().numpy()
+        self._cache = (key, g, H)
+        return g, H
 
     def grad(self, x):
-        g = _vG(*self._args(x)).numpy()
+        g = self._gh(x, False)[0]
         out = np.zeros(self.ndof)
         np.add.at(out, self.dof.ravel(), g.ravel())
         return out
 
     def hess(self, x):
-        h = _vH(*self._args(x)).numpy().reshape(-1)
+        h = self._gh(x, True)[1].reshape(-1)
         return sp.coo_matrix((h, (self.rows, self.cols)), shape=(self.ndof, self.ndof)).tocsr()
 
     def strains(self, x):
