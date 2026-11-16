@@ -11,6 +11,8 @@ LABELS = {
     "energy.bend": "패널 굽힘 에너지 (N·mm)",
     "energy.fold": "접힘 에너지 (N·mm)",
     "energy.strain": "변형 에너지 (N·mm)",
+    "energy.plastic": "소성 소산 에너지 (N·mm)",
+    "peeq.max": "최대 등가 소성 변형률",
     "energy.damping": "감쇠 소산 에너지 (N·mm)",
     "energy.kinetic": "운동 에너지 (N·mm)",
     "contact.count": "접촉 쌍 수",

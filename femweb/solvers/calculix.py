@@ -229,9 +229,12 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         L += [f"*MATERIAL, NAME=M_{name}", "*ELASTIC", f"{m['E']:.9g}, {m['nu']:.9g}", "*DENSITY", f"{m['rho']:.9g}"]
         if m.get("yield"):
             plastic = True
-            L += ["*PLASTIC", f"{m['yield']:.9g}, 0."]
-            H = m.get("hardening") or 0.0
-            L.append(f"{m['yield'] + H * 0.5:.9g}, 0.5")
+            if m.get("curve"):
+                L += ["*PLASTIC"] + [f"{sg:.9g}, {ep:.9g}" for ep, sg in m["curve"]]
+            else:
+                L += ["*PLASTIC", f"{m['yield']:.9g}, 0."]
+                H = m.get("hardening") or 0.0
+                L.append(f"{m['yield'] + H * 0.5:.9g}, 0.5")
     notes = []
     for key in elsets:
         kind, g, extra = key

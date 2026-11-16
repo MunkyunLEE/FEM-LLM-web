@@ -76,7 +76,7 @@ def _bangle(n, pj, pk, q):
     return torch.atan2(s, _bdot(n, m))
 
 
-def _benergy(u, Dmi, A0, B, R, kind, th0, w, sg, E, nu, t):
+def _bstrain(u, Dmi, B, R, kind, th0, w, sg):
     p = u[:, :18].reshape(-1, 6, 3)
     phi = u[:, 18:]
     ys = []
@@ -94,6 +94,11 @@ def _benergy(u, Dmi, A0, B, R, kind, th0, w, sg, E, nu, t):
     Ds = torch.stack([p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]], dim=2)
     F = Ds @ Dmi
     Em = 0.5 * (F.transpose(1, 2) @ F - torch.eye(2))
+    return Em, K
+
+
+def _benergy(u, Dmi, A0, B, R, kind, th0, w, sg, E, nu, t):
+    Em, K = _bstrain(u, Dmi, B, R, kind, th0, w, sg)
 
     def quad(e):
         return (1.0 - nu) * (e * e).sum((1, 2)) + nu * (e[:, 0, 0] + e[:, 1, 1]) ** 2
@@ -102,8 +107,86 @@ def _benergy(u, Dmi, A0, B, R, kind, th0, w, sg, E, nu, t):
     return A0 * c * (0.5 * t * quad(Em) + t**3 / 24.0 * quad(K))
 
 
+GAUSS5 = (np.array([-1.0, -0.5, 0.0, 0.5, 1.0]), np.array([1.0, 4.0, 2.0, 4.0, 1.0]) / 6.0)
+R23 = (2.0 / 3.0) ** 0.5
+
+
+class Hardening:
+    def __init__(self, table, E):
+        tb = sorted((float(a), float(b)) for a, b in table)
+        ep = np.array([a for a, _ in tb])
+        sy = np.array([b for _, b in tb])
+        if ep[0] > 0:
+            ep = np.concatenate([[0.0], ep])
+            sy = np.concatenate([[sy[0]], sy])
+        sl = np.diff(sy) / np.maximum(np.diff(ep), 1e-30)
+        sl = np.concatenate([sl, [1e-4 * E if len(tb) > 1 else 0.0]])
+        if len(tb) == 1:
+            sl[:] = 1e-4 * E
+        self.ep = torch.tensor(ep)
+        self.sy = torch.tensor(sy)
+        self.sl = torch.tensor(np.maximum(sl, 1e-6 * E))
+
+    def __call__(self, a):
+        i = torch.clamp(torch.bucketize(a.detach(), self.ep, right=True) - 1, 0, len(self.ep) - 1)
+        return self.sy[i] + self.sl[i] * (a - self.ep[i]), self.sl[i]
+
+
+def _return_map(e, ep, al, E, nu, hard):
+    G = E / (2.0 * (1.0 + nu))
+    c = E / (1.0 - nu * nu)
+    ee = e - ep
+    s11 = c * (ee[..., 0] + nu * ee[..., 1])
+    s22 = c * (ee[..., 1] + nu * ee[..., 0])
+    s12 = G * ee[..., 2]
+    r2 = 2.0**0.5
+    h1 = (s11 + s22) / r2
+    h2 = (s11 - s22) / r2
+    h3 = s12
+    a1 = E / (3.0 * (1.0 - nu))
+    a2 = 2.0 * G
+
+    def fbar(dg):
+        d1 = 1.0 + dg * a1
+        d2 = 1.0 + dg * a2
+        q = h1 * h1 / (3.0 * d1 * d1) + (h2 * h2 + 2.0 * h3 * h3) / (d2 * d2)
+        f = torch.sqrt(q + 1e-30)
+        df = (-h1 * h1 * a1 / (3.0 * d1**3) - (h2 * h2 + 2.0 * h3 * h3) * a2 / d2**3) / f
+        return f, df
+
+    def g(dg):
+        f, df = fbar(dg)
+        sy, H = hard(al + R23 * dg * f)
+        return f - R23 * sy, df - R23 * R23 * H * (f + dg * df)
+
+    with torch.no_grad():
+        f0, _ = fbar(torch.zeros_like(h1))
+        sy0, _ = hard(al)
+        active = f0 > R23 * sy0
+        dg = torch.zeros_like(h1)
+        for _ in range(40):
+            gv, dv = g(dg)
+            step = torch.where(active, gv / dv, torch.zeros_like(gv))
+            dg = torch.clamp(dg - step, min=0.0)
+            if float(step.abs().max()) < 1e-14 * (1.0 + float(dg.abs().max())):
+                break
+        _, dv = g(dg)
+    gv, _ = g(dg)
+    dgd = torch.where(active, dg - gv / dv, torch.zeros_like(dg))
+    d1 = 1.0 + dgd * a1
+    d2 = 1.0 + dgd * a2
+    n1, n2, n3 = h1 / d1, h2 / d2, h3 / d2
+    t11 = (n1 + n2) / r2
+    t22 = (n1 - n2) / r2
+    sig = torch.stack([t11, t22, n3], dim=-1)
+    fnew = torch.sqrt(n1 * n1 / 3.0 + n2 * n2 + 2.0 * n3 * n3 + 1e-30)
+    epn = ep + dgd[..., None] * torch.stack([(2.0 * t11 - t22) / 3.0, (2.0 * t22 - t11) / 3.0, 2.0 * n3], dim=-1)
+    aln = al + R23 * dgd * fnew
+    return sig, epn, aln
+
+
 class Shell:
-    def __init__(self, X, tris, E, nu, t, clamped=None):
+    def __init__(self, X, tris, E, nu, t, clamped=None, plastic=None):
         X = np.asarray(X, float)
         tris = np.asarray(tris, int)
         self.n = len(X)
@@ -191,6 +274,15 @@ class Shell:
         self.cols = np.tile(dof, (1, 21)).ravel()
         self.th0 = _vA(tt(X[np.hstack([tris, opp])]), self.R, self.kind)
         self._cache = None
+        self.plastic = None
+        if plastic:
+            self.plastic = Hardening(plastic, float(E))
+            self.zk = 0.5 * self.t[:, None] * torch.tensor(GAUSS5[0])[None, :]
+            self.wk = self.tA0[:, None] * 0.5 * self.t[:, None] * torch.tensor(GAUSS5[1])[None, :]
+            self.ep = torch.zeros(ne, 5, 3)
+            self.al = torch.zeros(ne, 5)
+            self.sig = torch.zeros(ne, 5, 3)
+            self.wp = 0.0
         self.floor = 1e-13 * float(E) * float(np.mean(self.thick)) * float(np.sqrt(self.A0.mean())) * np.sqrt(self.ndof)
 
     def x0(self, X=None):
@@ -203,8 +295,32 @@ class Shell:
         return (u, self.Dmi, self.tA0, self.B, self.R, self.kind, self.th0, self.w, self.sg, self.E, self.nu, self.t)
 
     def energy(self, x):
+        if self.plastic is not None:
+            eps, sig, ep, al = self._stress(x)
+            ee = eps - ep
+            return float(0.5 * (self.wk[:, :, None] * sig * ee).sum())
         with torch.no_grad():
             return float(_benergy(*self._args(x)).sum())
+
+    def _eps(self, u, args):
+        Em, K = _bstrain(u, args[1], args[3], args[4], args[5], args[6], args[7], args[8])
+        e = Em[:, None, :, :] + self.zk[:, :, None, None] * K[:, None, :, :]
+        return torch.stack([e[..., 0, 0], e[..., 1, 1], 2.0 * e[..., 0, 1]], dim=-1)
+
+    def _stress(self, x):
+        args = self._args(x)
+        with torch.no_grad():
+            eps = self._eps(args[0], args)
+            return (eps,) + _return_map(eps, self.ep, self.al, self.E[:, None], self.nu[:, None], self.plastic)
+
+    def commit(self, x):
+        if self.plastic is None:
+            return
+        eps, sig, ep, al = self._stress(x)
+        sy, _ = self.plastic(0.5 * (al + self.al))
+        self.wp += float((self.wk * sy * (al - self.al)).sum())
+        self.ep, self.al, self.sig = ep, al, sig
+        self._cache = None
 
     def _gh(self, x, second):
         key = np.asarray(x, float).tobytes()
@@ -213,11 +329,18 @@ class Shell:
             return c[1], c[2]
         args = self._args(x)
         u = args[0].clone().requires_grad_(True)
-        e = _benergy(u, *args[1:])
-        g = torch.autograd.grad(e.sum(), u, create_graph=second)[0]
+        if self.plastic is None:
+            e = _benergy(u, *args[1:])
+            g = torch.autograd.grad(e.sum(), u, create_graph=second)[0]
+        else:
+            eps = self._eps(u, args)
+            sig, _, _ = _return_map(eps, self.ep, self.al, self.E[:, None], self.nu[:, None], self.plastic)
+            g = torch.autograd.grad(eps, u, grad_outputs=self.wk[:, :, None] * sig, create_graph=second)[0]
         H = None
         if second:
             H = torch.stack([torch.autograd.grad(g[:, i].sum(), u, retain_graph=True)[0] for i in range(21)], 1).numpy()
+            if self.plastic is not None:
+                H = 0.5 * (H + H.transpose(0, 2, 1))
         g = g.detach().numpy()
         self._cache = (key, g, H)
         return g, H
@@ -290,14 +413,15 @@ def newton(sh, x, free, fext, extra=None, tol=1e-8, itmax=25):
             dx = _solve(Hf + sp.identity(len(free)) * (abs(Hf.diagonal()).mean() * 1e-3), -r)
         if extra is not None and hasattr(extra, "limit"):
             dx = dx * extra.limit(x, free, dx)
-        e0 = total(x)
+        pd = getattr(sh, "plastic", None) is not None
+        e0 = 0.0 if pd else total(x)
         a = 1.0
         ok = False
         for _ in range(12):
             xn = x.copy()
             xn[free] += a * dx
             gn = resid(xn)
-            if np.isfinite(gn).all() and (np.linalg.norm(gn[free]) < nr or total(xn) < e0):
+            if np.isfinite(gn).all() and (np.linalg.norm(gn[free]) < nr or (not pd and total(xn) < e0) or (pd and abs(gn[free] @ dx) < 0.9 * abs(r @ dx))):
                 ok = True
                 break
             a *= 0.5
@@ -351,6 +475,20 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
         if lt - lam < 1e-12:
             hist.append({"lam": lam, "failed": True})
             break
+        try:
+            g0 = sh.grad(x) - fext * amp(lt)
+            H0 = sh.hess(x)
+            if extra is not None:
+                g0 = g0 + extra.grad(x)
+                H0 = H0 + extra.hess(x)
+            du = xt - x
+            du[free] = _solve(H0[free][:, free], -(g0 + H0 @ du)[free])
+            if np.isfinite(du).all():
+                a = extra.limit(x, np.arange(ndof), du) if extra is not None and hasattr(extra, "limit") else 1.0
+                if a >= 1.0:
+                    xt = x + du
+        except Exception:
+            pass
         xs, info = newton(sh, xt, free, fext * amp(lt), extra=extra, tol=tol)
         if not info["converged"]:
             cuts += 1
@@ -364,14 +502,17 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
         lam = lt
         if extra is not None and hasattr(extra, "commit"):
             extra.commit(x)
-        g = sh.grad(x)
+        if hasattr(sh, "commit"):
+            g0 = sh.grad(x)
+            sh.commit(x)
+        g = sh.grad(x) if getattr(sh, "plastic", None) is None else g0
         if extra is not None:
             g = g + (extra.phys_grad(x) if hasattr(extra, "phys_grad") else extra.grad(x))
         rec = {"lam": lam, "x": x.copy(), "reaction": g - fext * amp(lam), "iters": info["iters"]}
         hist.append(rec)
         if on_step:
             on_step(rec)
-        if info["iters"] <= 6:
+        if info["iters"] <= 9:
             dl = min(dl * 1.5, 1.0 / nsteps)
     return hist
 
@@ -763,7 +904,19 @@ def linear_buckling(sh, fixed, pres, pval, f, k=1):
     return [o[0] for o in out], [o[1] for o in out]
 
 
+def _nodal(sh, val):
+    nod = np.zeros(sh.n)
+    cnt = np.zeros(sh.n)
+    np.add.at(nod, sh.tris.ravel(), np.repeat(val, 3))
+    np.add.at(cnt, sh.tris.ravel(), 1.0)
+    return nod / np.maximum(cnt, 1.0)
+
+
 def _vm(sh, x):
+    if sh.plastic is not None:
+        sg = sh.sig
+        vm = torch.sqrt(torch.clamp(sg[..., 0] ** 2 + sg[..., 1] ** 2 - sg[..., 0] * sg[..., 1] + 3 * sg[..., 2] ** 2, min=0)).max(1).values.numpy()
+        return _nodal(sh, vm)
     Em, K = sh.strains(x)
     E = sh.E.numpy()[:, None, None]
     nu = sh.nu.numpy()[:, None, None]
@@ -826,8 +979,16 @@ def solve(model, spec, progress=None):
     mat0 = mats.get(secs[G[0]].get("material", "default"), mats["default"])
     if any(mats.get(secs[g].get("material", "default"), mats["default"]) is not mat0 for g in G):
         msgs.append("자체 쉘 솔버는 재료를 하나만 써서 첫 그룹의 재료로 풀었습니다")
+    ptable = None
     if mat0.get("yield"):
-        msgs.append("자체 쉘 솔버의 소성은 아직 구현 전이라 탄성으로 풀었습니다")
+        if mat0.get("curve"):
+            ptable = [(float(a), float(b)) for a, b in mat0["curve"]]
+            msgs.append(f"소성: J2 등방 경화, 다선형 곡선 {len(ptable)}점 (항복 {ptable[0][1]:g} MPa, 마지막 점 뒤로는 거의 평평), 두께 방향 심프슨 5점")
+        else:
+            y, Hm = float(mat0["yield"]), float(mat0.get("hardening") or 0.0)
+            ptable = [(0.0, y), (1.0, y + Hm)] if Hm > 0 else [(0.0, y)]
+            msgs.append(f"소성: J2 등방 경화, 항복 {y:g} MPa, 경화 계수 {Hm:g} MPa, 두께 방향 심프슨 5점")
+        msgs.append("소성 변형률은 그린 변형률 기준의 소변형률 식이라 접힘부처럼 변형률이 수십 %인 곳은 근사입니다")
     E, nu, rho = float(mat0["E"]), float(mat0["nu"]), float(mat0.get("rho") or 0.0)
     table = bc_table(model, spec)
     rotn = {i for (i, d) in table if d > 3}
@@ -867,7 +1028,7 @@ def solve(model, spec, progress=None):
             msgs.append(f"초기 결함: 1차 좌굴 모드(선형 좌굴 계수 {fac[0]:.5g}) x {imp:g} mm")
         else:
             msgs.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다")
-    sh = Shell(X, T, E, nu, tt, clamped=rotn)
+    sh = Shell(X, T, E, nu, tt, clamped=rotn, plastic=ptable)
     fext = np.zeros(sh.ndof)
     fext[: sh.nx] = F.ravel()
     fext[fixed] = 0.0
@@ -940,7 +1101,7 @@ def solve(model, spec, progress=None):
     res = Result("shell", "static")
     res.nodes = X.copy()
     res.tris = T
-    names = ("time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "vonMises.max", "energy.strain", "energy.damping", "energy.kinetic", "contact.count", "contact.gap")
+    names = ("time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "vonMises.max", "energy.strain", "energy.plastic", "energy.damping", "energy.kinetic", "peeq.max", "contact.count", "contact.gap")
     hist = {k: [] for k in names}
     cforce, cdisp, rig = [], [], {i: [] for i in rigid_ids}
     cdof = np.array([3 * i + ctl["axis"] for i in ctl["nodes"]], int) if ctl else np.zeros(0, int)
@@ -953,7 +1114,12 @@ def solve(model, spec, progress=None):
         x = r["x"]
         U = x[: sh.nx].reshape(-1, 3) - X
         vm = _vm(sh, x)
-        res.add_frame(f"진행률 {lam:.4g}", lam, U, {"vonMises": vm})
+        fields = {"vonMises": vm}
+        if sh.plastic is not None:
+            fields["PEEQ"] = _nodal(sh, sh.al.max(1).values.numpy())
+        res.add_frame(f"진행률 {lam:.4g}", lam, U, fields)
+        hist["energy.plastic"].append(sh.wp if sh.plastic is not None else 0.0)
+        hist["peeq.max"].append(float(sh.al.max()) if sh.plastic is not None else 0.0)
         hist["time"].append(float(lam))
         hist["load_factor"].append(float(lam))
         g = r["reaction"]
@@ -993,11 +1159,14 @@ def solve(model, spec, progress=None):
         "변형 에너지 (N·mm)": hist["energy.strain"][-1],
         "프레임 수": len(res.frames),
     }
+    if sh.plastic is not None:
+        res.summary["최대 등가 소성 변형률"] = hist["peeq.max"][-1]
+        res.summary["소성 소산 에너지 (N·mm)"] = hist["energy.plastic"][-1]
     if dmp:
-        ratio = dmp.dissipated / max(hist["energy.strain"][-1], 1e-30)
+        ratio = dmp.dissipated / max(hist["energy.strain"][-1] + hist["energy.plastic"][-1], 1e-30)
         res.summary["감쇠 소산 에너지 (N·mm)"] = dmp.dissipated
-        res.summary["감쇠 소산 / 변형 에너지"] = round(ratio, 5)
-        msgs.append(f"감쇠가 소산한 에너지는 변형 에너지의 {100 * ratio:.3g}% 입니다" + (". 5%를 넘으면 감쇠가 결과에 영향을 주므로 스텝 시간을 늘리거나 감쇠비를 줄이세요" if ratio > 0.05 else ""))
+        res.summary["감쇠 소산 / (변형 + 소성) 에너지"] = round(ratio, 5)
+        msgs.append(f"감쇠가 소산한 에너지는 변형 에너지와 소성 소산의 합의 {100 * ratio:.3g}% 입니다" + (". 5%를 넘으면 감쇠가 결과에 영향을 주므로 스텝 시간을 늘리거나 감쇠비를 줄이세요" if ratio > 0.05 else ""))
     if ipc is not None:
         res.summary["접촉 쌍 수 (끝)"] = int(hist["contact.count"][-1])
         if rigid_ids:

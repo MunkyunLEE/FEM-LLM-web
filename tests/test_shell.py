@@ -159,7 +159,7 @@ def test_adapter_tube_with_contact_and_damping():
     r = S.solve(base, spec)
     k = r.history["control.force"][0] / r.history["control.disp"][0]
     assert abs(k - 70000.0 * 160.0 / 120.0) < 0.1 * 70000.0 * 160.0 / 120.0
-    assert r.summary["감쇠 소산 / 변형 에너지"] < 0.01
+    assert r.summary["감쇠 소산 / (변형 + 소성) 에너지"] < 0.01
     assert len(r.frames) >= 4
 
 
@@ -181,3 +181,58 @@ def test_bc_conflict_warning():
     top = {"plane": {"axis": "z", "at": "max"}}
     spec, _ = apply_ops(default_spec(m), [{"op": "add_bc", "dofs": [3], "select": top}, {"op": "add_bc", "dofs": [3], "value": -1.0, "select": top}], m)
     assert any("서로 다른 값" in w for w in warnings_for(spec, m))
+
+
+def test_plastic_uniaxial_matches_bilinear():
+    E, nu, sy, Hm, L, b, t, d = 70000.0, 0.3, 200.0, 1000.0, 100.0, 20.0, 1.0, 2.0
+    X, T = S.grid(L, b, 10, 2)
+    left = np.where(X[:, 0] < 1e-9)[0]
+    right = np.where(X[:, 0] > L - 1e-9)[0]
+    fixed = np.concatenate([left * 3, [left[0] * 3 + 1], np.arange(len(X)) * 3 + 2])
+    sh = S.Shell(X, T, E, nu, t, plastic=[(0, sy), (1, sy + Hm)])
+    h = S.run_static(sh, X, fixed, right * 3, np.full(len(right), d), np.zeros(sh.ndof), 10)
+    e = d / L
+    eG = e + 0.5 * e * e
+    Et = E * Hm / (E + Hm)
+    ref = (sy + Et * (eG - sy / E)) * (1 + e)
+    assert abs(h[-1]["reaction"][right * 3].sum() / (b * t) - ref) < 1e-3 * ref
+    assert abs(float(sh.al.max()) - (eG - sy / E) * E / (E + Hm)) < 1e-6
+    assert sh.wp > 0
+
+
+def test_plastic_tangent_is_consistent():
+    X, T = S.grid(100.0, 20.0, 6, 2)
+    sh = S.Shell(X, T, 70000.0, 0.3, 1.0, plastic=[(0, 200.0), (0.05, 260.0), (0.2, 300.0)])
+    rng = np.random.default_rng(0)
+    x = sh.x0()
+    x[0 : sh.nx : 3] += 0.006 * X[:, 0]
+    x[: sh.nx] += 0.05 * rng.normal(size=sh.nx)
+    assert int((sh._stress(x)[3] > 0).sum()) > 20
+    d = rng.normal(size=sh.ndof)
+    hh = 1e-6
+    fd = (sh.grad(x + hh * d) - sh.grad(x - hh * d)) / (2 * hh)
+    assert np.linalg.norm(sh.hess(x) @ d - fd) < 1e-5 * np.linalg.norm(fd)
+
+
+def test_plastic_cantilever_limit_load():
+    E, sy, L, b, t = 70000.0, 200.0, 50.0, 10.0, 2.0
+    X, T = S.grid(L, b, 25, 4)
+    cl = np.where(X[:, 0] < 1e-9)[0]
+    tip = np.where(X[:, 0] > L - 1e-9)[0]
+    sh = S.Shell(X, T, E, 0.3, t, clamped=cl, plastic=[(0, sy), (1, sy + 1000.0)])
+    fixed = np.concatenate([cl * 3, cl * 3 + 1, cl * 3 + 2])
+    h = S.run_static(sh, X, fixed, tip * 3 + 2, np.full(len(tip), 8.0), np.zeros(sh.ndof), 8)
+    assert not h[-1].get("failed")
+    Py = sy * b * t * t / 6 / L
+    assert 1.5 < h[-1]["reaction"][tip * 3 + 2].sum() / Py < 1.9
+
+
+def test_material_curve_op():
+    from femweb.spec import apply_ops, default_spec
+
+    m = _tube_model()
+    spec, _ = apply_ops(default_spec(m), [{"op": "set_material", "name": "default", "curve": [[0.02, 275], [0, 240], [0.2, 330]]}], m)
+    mat = spec["materials"]["default"]
+    assert mat["yield"] == 240 and mat["curve"][0] == [0.0, 240.0] and len(mat["curve"]) == 3
+    with pytest.raises(ValueError):
+        apply_ops(default_spec(m), [{"op": "set_material", "name": "default", "curve": [[0, 240], [0.1, 200]]}], m)

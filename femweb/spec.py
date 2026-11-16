@@ -216,6 +216,22 @@ def apply_ops(spec, ops, model=None):
             for f in ("E", "nu", "rho", "yield", "hardening"):
                 if f in op:
                     mat[f] = None if op[f] is None else _num(op[f], f)
+            if "curve" in op:
+                cv = op["curve"]
+                if not cv:
+                    mat["curve"] = None
+                else:
+                    pts = sorted([_num(a, "curve"), _num(b, "curve")] for a, b in cv)
+                    if len(pts) < 2 or pts[0][0] < 0 or any(q[1] <= 0 for q in pts) or any(pts[i + 1][0] <= pts[i][0] for i in range(len(pts) - 1)):
+                        raise ValueError("소성 곡선은 [소성변형률, 응력] 점 두 개 이상이며 변형률이 증가해야 합니다")
+                    if any(pts[i + 1][1] < pts[i][1] for i in range(len(pts) - 1)):
+                        raise ValueError("소성 곡선의 응력은 줄어들 수 없습니다 (진응력-소성변형률로 넣으세요)")
+                    if pts[0][0] > 0:
+                        pts.insert(0, [0.0, pts[0][1]])
+                    mat["curve"] = pts
+                    mat["yield"] = pts[0][1]
+            elif "yield" in op and op["yield"] is None:
+                mat["curve"] = None
             if mat["E"] <= 0 or not (-1 < mat["nu"] < 0.5):
                 raise ValueError("재료값 범위 오류 (E>0, -1<nu<0.5)")
             log.append(f"재료 {name}")
