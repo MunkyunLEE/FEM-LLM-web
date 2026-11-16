@@ -275,7 +275,11 @@ svg{max-width:100%;height:auto}
 <p><b>감쇠</b>: C = αM + βK₀ 로 두고 후방 오일러로 시간 적분합니다. 1·2차 고유진동수 ω₁, ω₂ 에서 감쇠비가 ζ 가 되도록 α, β 를 정합니다. 좌굴로 하중이 급락하는 구간을 정적 해석 대신 짧은 동적 과정으로 지나가게 해 줍니다.</p>
 <div class="eq">α = 2ζ ω₁ω₂ / (ω₁+ω₂),  β = 2ζ / (ω₁+ω₂)<span class="n">레일리 감쇠 계수</span></div>
 <div class="eq">M (x − x<sub>n</sub> − Δt v<sub>n</sub>)/Δt² + C (x − x<sub>n</sub>)/Δt + f<sub>int</sub>(x) + f<sub>contact</sub>(x) = f<sub>ext</sub><span class="n">한 시간 증분의 평형식</span></div>
-<p class="mute">소성, 호장법, 좌굴·모달 스텝은 자체 쉘 솔버에 아직 없습니다.</p>
+<p><b>탄소성 (J2, 등방 경화)</b>: 두께 방향 다섯 점(심프슨)에서 변형률 ε(z) = E + zκ 를 구하고, 점마다 평면응력 조건의 반환 사상으로 응력을 정합니다. 시험 응력이 항복면 밖이면 소성 승수 Δγ 를 스칼라 뉴턴법으로 풀어 항복면 위로 되돌립니다. 항복 응력 σ<sub>y</sub>(ε̄<sub>p</sub>) 는 입력한 진응력-소성변형률 점들을 직선으로 이은 값입니다.</p>
+<div class="eq">σ = [ C<sup>−1</sup> + Δγ P ]<sup>−1</sup> ( ε − ε<sub>p,n</sub> ),  √(σ<sup>T</sup>Pσ) = √(2/3) σ<sub>y</sub>( ε̄<sub>p,n</sub> + √(2/3) Δγ √(σ<sup>T</sup>Pσ) )<span class="n">평면응력 반환 사상</span></div>
+<div class="eq">f<sub>int</sub> = Σ<sub>요소</sub> A Σ<sub>k</sub> w<sub>k</sub> (t/2) (∂ε<sub>k</sub>/∂u)<sup>T</sup> σ<sub>k</sub><span class="n">내력</span></div>
+<p class="where"><b>C</b> 평면응력 탄성 행렬 · <b>P</b> 편차 응력을 뽑는 행렬 (σ<sup>T</sup>Pσ = s:s) · <b>w<sub>k</sub></b> 심프슨 가중치 (1,4,2,4,1)/6 · 접선 강성은 이 내력을 자동미분해서 얻으므로 반환 사상과 정확히 일치합니다(일관 접선).</p>
+<p class="mute">호장법, 좌굴·모달 스텝, 이동 경화, 변형률 속도 의존성은 자체 쉘 솔버에 아직 없습니다. 소성은 소변형률 식이라 변형률이 수십 %인 접힘부는 근사입니다.</p>
 
 <h2 id="verify">7. 검증 결과</h2>
 <p>이론해가 알려진 문제를 풀어서 계산이 맞는지 확인했습니다.</p>

@@ -653,7 +653,7 @@ def parse_clause(text, model, spec, ctx):
         return [], [], [HELP], [], {"answered": True}
     if re.search(r"stl\s*(?:메쉬|메시|mesh)\s*크기|메쉬\s*크기|메시\s*크기|mesh size|element size|요소\s*크기", t):
         return [], [], ["메쉬 크기는 왼쪽 'STL 메쉬 크기' 칸을 바꾼 뒤 파일을 다시 올리면 적용됩니다. 보·쉘 모델은 '요소 분할 4'처럼 분할수로 조절합니다"], [], {"answered": True}
-    if re.search(r"그래프|플롯|(?<![a-z])plot|graph|곡선|curve|차트|chart|이력\s*(?:을|를)?\s*(?:그려|보여)", t) and not re.search(r"(?:삭제|지워|제거|remove|delete|clear)", t):
+    if re.search(r"그래프|플롯|(?<![a-z])plot|graph|곡선|curve|차트|chart|이력\s*(?:을|를)?\s*(?:그려|보여)", t) and not re.search(r"(?:삭제|지워|제거|remove|delete|clear)", t) and not re.search(r"\d\s*(?:mpa)?\s*@\s*\d|소성\s*곡선|경화\s*곡선|plastic\s*curve|hardening\s*curve", t):
         p = parse_plot(c, model, spec, ctx)
         if p:
             return [p], [], [], [], {}
@@ -872,6 +872,22 @@ def parse_clause(text, model, spec, ctx):
         mat["yield"] = _f(m) * (1e3 if m.group(2) == "gpa" else 1.0)
     elif c.take(r"(?:항복|소성|yield|plastic\w*)\s*(?:을|를|은|는)?\s*(?:없애|없음|없이|끄|꺼|해제|제거|off|none)|탄성\s*(?:만|으로만)"):
         mat["yield"] = None
+    if c.has(r"곡선|curve") and c.has(r"소성|응력|경화|plastic|stress|hardening") or c.has(NUM + r"\s*(?:mpa)?\s*@\s*" + NUM):
+        pts = []
+        while True:
+            mm = c.take(NUM + r"\s*(?:mpa)?\s*@\s*" + NUM + r"\s*(%)?")
+            if not mm:
+                break
+            pts.append([float(mm.group(2)) * (0.01 if mm.group(3) else 1.0), float(mm.group(1))])
+        if c.take(r"(?:삭제|지워|제거|없애|없이|해제|remove|delete|off)"):
+            mat["curve"] = None
+        elif len(pts) >= 2:
+            mat["curve"] = pts
+        c.takeall(r"소성|응력|경화|진응력|변형률|곡선|curve|plastic|stress|strain|hardening|입력|설정|으로|로|는|은|,")
+    m = c.take(r"(?:멱\s*법칙|거듭제곱|power\s*-?\s*law)\s*(?:경화|hardening)?\s*(?:k\s*(?:=|:)?\s*)?" + NUM + r"\s*(?:mpa)?\s*,?\s*(?:m|n|지수)\s*(?:=|:)?\s*" + NUM)
+    if m:
+        mat["power"] = [float(m.group(1)), float(m.group(2))]
+        c.takeall(r"경화|hardening|으로|로")
     m = c.take(r"(?:경화\s*(?:계수|기울기)?|hardening)\s*(?:를|을|은|는|=|:)?\s*" + NUM + r"\s*(gpa|mpa)?")
     if m:
         mat["hardening"] = _f(m) * (1e3 if m.group(2) == "gpa" else 1.0)
@@ -1304,7 +1320,7 @@ def describe_op(o):
     if k == "update":
         return f"{o['id']} 수정: " + ", ".join(f"{a}={fmt_vec(b) if isinstance(b, list) else b}" for a, b in o.items() if a not in ("op", "id"))
     if k == "set_material":
-        return "재료: " + ", ".join(f"{a}={b:g}" if isinstance(b, (int, float)) else f"{a}=없음" for a, b in o.items() if a not in ("op", "name"))
+        return "재료: " + ", ".join(f"{a}={b:g}" if isinstance(b, (int, float)) else f"멱법칙 경화 k={b[0]:g}, m={b[1]:g}" if a == "power" and isinstance(b, list) else f"소성 곡선 {len(b)}점" if isinstance(b, list) else f"{a}=없음" for a, b in o.items() if a not in ("op", "name"))
     if k == "set_section":
         s = []
         if "thickness" in o:

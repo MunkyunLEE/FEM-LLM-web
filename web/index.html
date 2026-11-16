@@ -32,6 +32,7 @@
     <section>
       <h2>재료 · 단면 <small>mm · N · MPa</small></h2>
       <div class="row three"><label>E<input id="matE" type="number" step="any"></label><label>ν<input id="matNu" type="number" step="any"></label><label>항복<input id="matY" type="number" step="any" placeholder="없음"></label></div>
+      <div class="row two"><label title="항복 뒤 응력 증가 기울기 (MPa). 곡선을 넣으면 무시">경화 계수<input id="matH" type="number" step="any" min="0" placeholder="0"></label><label title="진응력@소성변형률 을 쉼표로 구분. 예: 240@0, 275@0.02, 300@0.06">소성 곡선<input id="matCurve" type="text" placeholder="240@0, 275@0.02"></label></div>
       <div class="row three"><label>쉘 두께<input id="secT" type="number" step="any"></label><label>보 b<input id="secB" type="number" step="any"></label><label>보 h<input id="secH" type="number" step="any"></label></div>
       <div class="row two"><label>힌지 κ (N·mm/rad/mm)<input id="hingeK" type="number" step="any" placeholder="자동"></label><label>자동 비율 κ=r·D/L<input id="hingeR" type="number" step="any"></label></div>
       <div class="row two"><label>쉘 공유 엣지 힌지<select id="hingeAuto"><option value="off">끔 (OBJ의 hinge_ 선만)</option><option value="auto">자동 (그룹 경계 + 꺾인 엣지)</option><option value="groups">그룹 경계</option><option value="crease">꺾인 엣지</option><option value="all">모든 내부 엣지</option></select></label><label class="check"><input type="checkbox" id="hingePin">핀 조인트 (회전 자유)</label></div>

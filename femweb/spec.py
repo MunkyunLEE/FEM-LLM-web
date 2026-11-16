@@ -216,6 +216,16 @@ def apply_ops(spec, ops, model=None):
             for f in ("E", "nu", "rho", "yield", "hardening"):
                 if f in op:
                     mat[f] = None if op[f] is None else _num(op[f], f)
+            if op.get("power") is not None:
+                kk, mm = (_num(v, "power") for v in op["power"])
+                y0 = op.get("yield", mat.get("yield"))
+                if not y0 or kk <= 0 or not (0 < mm <= 1):
+                    raise ValueError("멱법칙 경화에는 항복 응력과 k>0, 0<m<=1 이 필요합니다")
+                eps = [0.0, 0.001, 0.002, 0.005, 0.01, 0.02, 0.035, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0]
+                op = dict(op, curve=[[e, float(y0) + kk * e**mm] for e in eps])
+                mat["power"] = [kk, mm]
+            elif "curve" in op:
+                mat["power"] = None
             if "curve" in op:
                 cv = op["curve"]
                 if not cv:

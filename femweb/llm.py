@@ -83,7 +83,7 @@ OPS:
  {"op":"add_contact","type":"rigid","shape":"plane","normal":[nx,ny,nz],"motion":[dx,dy,dz],"friction":mu}   rigid plane; normal points from the plane toward the body ([0,0,1] = floor under the model)
  {"op":"add_contact","type":"pair","a":<select>,"b":<select>,"friction":mu}   contact between two deformable regions (e.g. {"group":"body_1"})
  {"op":"remove","id":"..."}    {"op":"clear","what":"bcs"|"loads"|"plots"|"contacts"|"all"}
- {"op":"set_material","name":"default","E":MPa,"nu":..,"rho":tonne/mm3,"yield":MPa|null}
+ {"op":"set_material","name":"default","E":MPa,"nu":..,"rho":tonne/mm3,"yield":MPa|null,"hardening":MPa,"curve":[[plastic_strain,true_stress_MPa],...]|null}   curve = multilinear hardening, first point at plastic strain 0; or "power":[k,m] for sigma = yield + k*p^m
  {"op":"set_section","group":"*"|"<group>","thickness":mm,"beam":{"shape":"rect","b":mm,"h":mm}|{"shape":"circ","r":mm}}
  {"op":"set_hinge","group":"*"|"<hinge group>","kappa":N*mm/rad/mm|null,"ratio":number,"pin":bool}   pin=true is a pin joint (free rotation)
  {"op":"auto_hinge","mode":"auto"|"groups"|"crease"|"all"|"off","angle":deg}   turn shell-to-shell shared edges into hinges (auto = group boundaries + creases)

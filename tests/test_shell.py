@@ -236,3 +236,15 @@ def test_material_curve_op():
     assert mat["yield"] == 240 and mat["curve"][0] == [0.0, 240.0] and len(mat["curve"]) == 3
     with pytest.raises(ValueError):
         apply_ops(default_spec(m), [{"op": "set_material", "name": "default", "curve": [[0, 240], [0.1, 200]]}], m)
+
+
+def test_power_law_hardening_op_and_rule():
+    from femweb import rules
+    from femweb.spec import apply_ops, default_spec
+
+    m = _tube_model()
+    ops = rules.parse("항복 300, 멱법칙 경화 k 1000 m 0.3", m, default_spec(m))[0]
+    assert any(o.get("power") == [1000.0, 0.3] for o in ops)
+    spec, _ = apply_ops(default_spec(m), ops, m)
+    cv = spec["materials"]["default"]["curve"]
+    assert cv[0] == [0.0, 300.0] and abs(cv[-1][1] - 1300.0) < 1e-9

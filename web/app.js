@@ -651,6 +651,8 @@ function renderControls() {
   $('matE').value = m.E;
   $('matNu').value = m.nu;
   $('matY').value = m.yield ?? '';
+  $('matH').value = m.hardening || '';
+  $('matCurve').value = (m.curve || []).map((q) => `${q[1]}@${q[0]}`).join(', ');
   const sec = s.sections['*'];
   $('secT').value = sec.thickness;
   $('secB').value = sec.beam.b ?? '';
@@ -1049,6 +1051,11 @@ function bind() {
   $('addSelf').onclick = () => ops([{ op: 'add_contact', type: 'self', friction: 0 }]);
   $('matE').onchange = (e) => ops([{ op: 'set_material', name: 'default', E: +e.target.value }]);
   $('matNu').onchange = (e) => ops([{ op: 'set_material', name: 'default', nu: +e.target.value }]);
+  $('matH').onchange = (e) => ops([{ op: 'set_material', name: 'default', hardening: Math.max(0, +e.target.value || 0) }]);
+  $('matCurve').onchange = (e) => {
+    const pts = e.target.value.split(/[,;]+/).map((q) => q.trim()).filter(Boolean).map((q) => q.split('@').map(Number)).filter((q) => q.length === 2 && q.every(Number.isFinite)).map((q) => [q[1], q[0]]);
+    ops([{ op: 'set_material', name: 'default', curve: pts.length >= 2 ? pts : null }]);
+  };
   $('matY').onchange = (e) => ops([{ op: 'set_material', name: 'default', yield: e.target.value === '' ? null : +e.target.value }]);
   $('secT').onchange = (e) => ops([{ op: 'set_section', group: '*', thickness: +e.target.value }]);
   $('secB').onchange = (e) => ops([{ op: 'set_section', group: '*', beam: { b: +e.target.value } }]);

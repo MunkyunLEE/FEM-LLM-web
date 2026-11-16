@@ -372,7 +372,7 @@ def _solve(H, r):
         return spla.lsqr(H, r)[0]
 
 
-def newton(sh, x, free, fext, extra=None, tol=1e-8, itmax=25):
+def newton(sh, x, free, fext, extra=None, tol=1e-6, itmax=25):
     x = x.copy()
     fscale = max(np.linalg.norm(fext[free]), 1e-12)
     info = {"iters": 0, "converged": False}
@@ -436,7 +436,7 @@ def newton(sh, x, free, fext, extra=None, tol=1e-8, itmax=25):
     return x, info
 
 
-def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_step=None, tol=1e-8, time=1.0, maxcuts=12, x_init=None, amp=None):
+def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_step=None, tol=1e-6, time=1.0, maxcuts=12, x_init=None, amp=None):
     ndof = sh.ndof
     x = sh.x0(X) if x_init is None else x_init.copy()
     x0 = sh.x0(X)
@@ -884,7 +884,7 @@ def linear_buckling(sh, fixed, pres, pval, f, k=1):
         return None, None
     size = float(np.linalg.norm(sh.X.max(0) - sh.X.min(0)))
     eps = 1e-5 * size / um
-    x1, info = newton(sh, x0 + eps * u, fr, f * eps)
+    x1, info = newton(sh, x0 + eps * u, fr, f * eps, tol=1e-9)
     KG = (sh.hess(x1) - K0)[fr][:, fr] / eps
     try:
         vals, vecs = spla.eigsh(-KG.tocsc(), k=k, M=K0[fr][:, fr].tocsc(), which="LA")
