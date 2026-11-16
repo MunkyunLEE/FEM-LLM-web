@@ -40,7 +40,8 @@ def _strains(u, Dmi, B, R, kind, th0, w, sg):
     Ds = torch.stack([p[1] - p[0], p[2] - p[0]], dim=1)
     F = Ds @ Dmi
     Em = 0.5 * (F.T @ F - torch.eye(2))
-    dth = (_angles(p, R, kind) - th0) * w + 2.0 * sg * phi
+    da = _angles(p, R, kind) - th0
+    dth = torch.atan2(torch.sin(da), torch.cos(da)) * w + 2.0 * sg * phi
     K = (dth[:, None, None] * B).sum(0)
     return Em, K
 
@@ -437,3 +438,51 @@ class SelfContact:
     def force(self, x):
         g = self._gap(x)[0] if len(self.pn) else np.zeros(0)
         return float(-self.k * np.minimum(g, 0.0).sum()), int((g < 0).sum())
+
+
+class Stabilize:
+    def __init__(self, sh, c):
+        self.sh = sh
+        self.c = c
+        self.xp = None
+        d = np.zeros(sh.ndof)
+        d[: sh.nx] = 1.0
+        self.d = d
+        self.D = sp.diags(d * c).tocsr()
+
+    def begin(self, x):
+        self.xp = x.copy()
+
+    def energy(self, x):
+        v = (x - self.xp) * self.d
+        return float(0.5 * self.c * v @ v)
+
+    def grad(self, x):
+        return self.c * (x - self.xp) * self.d
+
+    def hess(self, x):
+        return self.D
+
+    def work(self, x):
+        return 2.0 * self.energy(x)
+
+
+class Extras:
+    def __init__(self, *parts):
+        self.parts = [p for p in parts if p is not None]
+
+    def begin(self, x):
+        for p in self.parts:
+            p.begin(x)
+
+    def energy(self, x):
+        return sum(p.energy(x) for p in self.parts)
+
+    def grad(self, x):
+        return sum(p.grad(x) for p in self.parts)
+
+    def hess(self, x):
+        H = self.parts[0].hess(x)
+        for p in self.parts[1:]:
+            H = H + p.hess(x)
+        return H
