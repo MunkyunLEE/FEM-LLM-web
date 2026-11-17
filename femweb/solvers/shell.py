@@ -510,10 +510,11 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
         lam = lt
         if extra is not None and hasattr(extra, "commit"):
             extra.commit(x)
+        g = sh.grad(x)
         if hasattr(sh, "commit"):
-            g0 = sh.grad(x)
             sh.commit(x)
-        g = sh.grad(x) if getattr(sh, "plastic", None) is None else g0
+        if hasattr(sh, "reset"):
+            x = sh.reset(x)
         if extra is not None:
             g = g + (extra.phys_grad(x) if hasattr(extra, "phys_grad") else extra.grad(x))
         rec = {"lam": lam, "x": x.copy(), "reaction": g - fext * amp(lam), "iters": info["iters"]}
@@ -973,7 +974,17 @@ def solve(model, spec, progress=None):
     st = spec["step"]
     if st["type"] not in ("static", "arclength"):
         raise ValueError("자체 쉘 솔버는 정적 스텝만 지원합니다 (좌굴·모달은 CalculiX 를 쓰세요)")
-    msgs = ["자체 쉘 솔버: 삼각형 쉘 요소(막 + 모서리 회전 휨), 대변형 음해법. 기하 비선형은 항상 켜져 있습니다"]
+    from .shell_quad import QuadShell
+
+    want = st.get("element", "auto")
+    allq = all(len(f) == 4 for f in model.shells)
+    quad = allq and want in ("auto", "quad")
+    if quad:
+        msgs = ["자체 쉘 솔버: 4절점 사각형 쉘 요소(MITC4 전단, 절점 회전 자유도, 2x2 적분), 대변형 음해법. 기하 비선형은 항상 켜져 있습니다"]
+    else:
+        msgs = ["자체 쉘 솔버: 삼각형 쉘 요소(막 + 모서리 회전 휨), 대변형 음해법. 기하 비선형은 항상 켜져 있습니다"]
+        if want == "quad":
+            msgs.append("사각형이 아닌 면이 있어 삼각형 요소로 풀었습니다")
     if st["type"] == "arclength":
         msgs.append("자체 쉘 솔버에는 호장법이 없어 변위·하중 증분 정적 해석으로 풀었습니다 (감쇠를 켜면 급락 구간을 지나기 쉽습니다)")
     if model.beams:
@@ -996,6 +1007,8 @@ def solve(model, spec, progress=None):
     secs = {g: section_for(spec, g) for g in set(G)}
     mats = spec["materials"]
     tt = np.array([float(secs[g]["thickness"]) for g in G])
+    QF = np.array([[int(i) for i in f] for f in model.shells], int) if quad else None
+    tq = np.array([float(section_for(spec, g)["thickness"]) for g in model.shell_group]) if quad else None
     mat0 = mats.get(secs[G[0]].get("material", "default"), mats["default"])
     if any(mats.get(secs[g].get("material", "default"), mats["default"]) is not mat0 for g in G):
         msgs.append("자체 쉘 솔버는 재료를 하나만 써서 첫 그룹의 재료로 풀었습니다")
@@ -1012,6 +1025,13 @@ def solve(model, spec, progress=None):
     E, nu, rho = float(mat0["E"]), float(mat0["nu"]), float(mat0.get("rho") or 0.0)
     table = bc_table(model, spec)
     rotn = {i for (i, d) in table if d > 3}
+    rotf = [(i, d - 4) for (i, d) in table if d > 3]
+
+    def make(Xc, pl=None):
+        if quad:
+            return QuadShell(Xc, QF, E, nu, tq, rot_fixed=rotf, plastic=pl)
+        return Shell(Xc, T, E, nu, tt, clamped=rotn, plastic=pl)
+
     fixed, pres, pval = [], [], []
     for (i, d), v in table.items():
         if d <= 3 and used[i]:
@@ -1025,16 +1045,20 @@ def solve(model, spec, progress=None):
     fixed = np.array(sorted(set(fixed)), int)
     pres = np.array(pres, int)
     pval = np.array(pval, float)
-    if rotn:
+    if rotn and not quad:
         msgs.append("회전 구속이 걸린 절점을 잇는 자유 모서리는 고정단(기울기 0)으로 처리했습니다")
+    if quad and any(table[k] != 0 for k in table if k[1] > 3):
+        msgs.append("0이 아닌 지정 회전은 지원하지 않아 회전 0 구속으로 처리했습니다")
     F, M, _ = lumped(model, spec)
-    if np.abs(M).sum() > 0:
-        msgs.append("모멘트 하중은 자체 쉘 솔버에서 무시했습니다")
+    if np.abs(M).sum() > 0 and not quad:
+        msgs.append("모멘트 하중은 삼각형 요소에서 무시했습니다 (사각형 요소는 지원)")
     imp = float(st.get("imperfection") or 0)
     if imp > 0:
-        sh0 = Shell(X, T, E, nu, tt, clamped=rotn)
+        sh0 = make(X)
         f0 = np.zeros(sh0.ndof)
         f0[: sh0.nx] = lumped(model, orig)[0].ravel()
+        if quad:
+            f0[sh0.nx :] = lumped(model, orig)[1].ravel()
         tb0 = bc_table(model, orig)
         fx0 = np.array(sorted({3 * i + d - 1 for (i, d) in tb0 if d <= 3} | set(fixed.tolist())), int)
         pv = np.zeros(0)
@@ -1048,9 +1072,15 @@ def solve(model, spec, progress=None):
             msgs.append(f"초기 결함: 1차 좌굴 모드(선형 좌굴 계수 {fac[0]:.5g}) x {imp:g} mm")
         else:
             msgs.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다")
-    sh = Shell(X, T, E, nu, tt, clamped=rotn, plastic=ptable)
+    sh = make(X, ptable)
+    if quad:
+        T = sh.tris
+        tt = sh.thick
     fext = np.zeros(sh.ndof)
     fext[: sh.nx] = F.ravel()
+    if quad:
+        fext[sh.nx :] = M.ravel()
+        fext[sh.fixed_phi] = 0.0
     fext[fixed] = 0.0
     n = max(1, int(st.get("increments", 25)))
     parts = []
@@ -1154,10 +1184,10 @@ def solve(model, spec, progress=None):
         lam = r["lam"]
         x = r["x"]
         U = x[: sh.nx].reshape(-1, 3) - X
-        vm = _vm(sh, x)
+        vm = sh.vm_nodal(x) if quad else _vm(sh, x)
         fields = {"vonMises": vm}
         if sh.plastic is not None:
-            fields["PEEQ"] = _nodal(sh, sh.al.max(1).values.numpy())
+            fields["PEEQ"] = sh.peeq_nodal() if quad else _nodal(sh, sh.al.max(1).values.numpy())
         g = r["reaction"]
         rf = np.zeros((sh.n, 3))
         rf.ravel()[fixed] = g[fixed]
@@ -1213,7 +1243,7 @@ def solve(model, spec, progress=None):
     res.history = hist
     res.summary = {
         "절점 수": int(used.sum()),
-        "삼각형 요소 수": int(len(T)),
+        ("사각형 요소 수" if quad else "삼각형 요소 수"): int(len(QF) if quad else len(T)),
         "최대 변위 (mm)": hist["u.max"][-1],
         "최대 von Mises 응력 (MPa, 표면)": hist["vonMises.max"][-1],
         "변형 에너지 (N·mm)": hist["energy.strain"][-1],

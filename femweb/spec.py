@@ -28,7 +28,7 @@ def default_spec(model=None):
         "bcs": [],
         "loads": [],
         "contacts": [],
-        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
+        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "element": "auto", "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
         "plots": [],
     }
 
@@ -75,6 +75,7 @@ def apply_ops(spec, ops, model=None):
     spec = copy.deepcopy(spec)
     spec.setdefault("contacts", [])
     spec["step"].setdefault("amplitude", "linear")
+    spec["step"].setdefault("element", "auto")
     spec["step"].setdefault("damping", {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0})
     log = []
     for op in ops:
@@ -317,6 +318,10 @@ def apply_ops(spec, ops, model=None):
                 st["control_kind"] = op["control_kind"]
             if "control_load" in op:
                 st["control_load"] = op["control_load"] or None
+            if "element" in op:
+                if op["element"] not in ("auto", "tri", "quad"):
+                    raise ValueError("element 는 auto, tri, quad 중 하나여야 합니다")
+                st["element"] = op["element"]
             if "amplitude" in op:
                 if op["amplitude"] not in ("linear", "smooth"):
                     raise ValueError("amplitude 는 linear 또는 smooth 여야 합니다")

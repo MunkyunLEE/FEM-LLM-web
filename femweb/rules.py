@@ -784,6 +784,10 @@ def parse_clause(text, model, spec, ctx):
                 dm["time"] = _f(m)
         c.takeall(r"감쇠비?|댐핑|damping|비례|1\s*[,·]?\s*2\s*차|모드|기준|에\s*대해|추가|넣어|설정|적용|켜")
         st["damping"] = dm
+    if c.take(r"(?:사각형|쿼드|4\s*절점|quad)\s*(?:쉘|셸)?\s*(?:요소|element)\s*(?:으로|로)?"):
+        st["element"] = "quad"
+    elif c.take(r"(?:삼각형|3\s*절점|tri(?:angle)?)\s*(?:쉘|셸)?\s*(?:요소|element)\s*(?:으로|로)?"):
+        st["element"] = "tri"
     if c.take(r"부드럽게\s*(?:증가|올려|가해)?|S\s*자\s*(?:곡선)?|smooth\s*step|smooth(?:ly)?"):
         st["amplitude"] = "smooth"
     if c.take(r"분기\s*(?:점)?\s*(?:전환|추적|감지|회피)?|가지\s*전환|branch\s*switch(?:ing)?|bifurcation"):
@@ -1370,6 +1374,8 @@ def describe_op(o):
             d = o["damping"]
             nm = {"none": "감쇠 없음", "mass": "질량 비례 감쇠", "stiffness": "강성 비례 감쇠", "rayleigh": "레일리 감쇠", "direct": "감쇠 직접 입력"}.get(d.get("kind"), "감쇠")
             s.append(nm + (f" {d['zeta']:g}%" if d.get("zeta") else "") + (f", 스텝 시간 {d['time']:g} s" if d.get("time") else ""))
+        if o.get("element"):
+            s.append("쉘 요소 " + {"auto": "자동", "quad": "사각형", "tri": "삼각형"}[o["element"]])
         if o.get("amplitude"):
             s.append("증가 곡선 " + ("S자" if o["amplitude"] == "smooth" else "선형"))
         return "해석 설정: " + ", ".join(s)

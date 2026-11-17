@@ -797,8 +797,9 @@ function renderControls() {
   $('dampZeta').value = dm.zeta || 0;
   $('dampTime').value = dm.time || 0;
   $('amplitude').value = s.step.amplitude || 'linear';
+  $('element').value = s.step.element || 'auto';
   const own = s.solver === 'shell';
-  for (const id of ['dampKind', 'amplitude', 'addSelf']) $(id).disabled = !own;
+  for (const id of ['dampKind', 'amplitude', 'addSelf', 'element']) $(id).disabled = !own;
   $('dampZeta').disabled = !own || dm.kind === 'none';
   $('dampTime').disabled = !own || dm.kind === 'none';
   $('addSelf').disabled = !own || (s.contacts || []).some((c) => c.type === 'self');
@@ -1202,6 +1203,7 @@ function bind() {
   $('dampKind').onchange = (e) => ops([{ op: 'set_step', damping: { kind: e.target.value } }]);
   $('dampZeta').onchange = (e) => ops([{ op: 'set_step', damping: { zeta: Math.max(0, +e.target.value || 0) } }]);
   $('dampTime').onchange = (e) => ops([{ op: 'set_step', damping: { time: Math.max(0, +e.target.value || 0) } }]);
+  $('element').onchange = (e) => ops([{ op: 'set_step', element: e.target.value }]);
   $('amplitude').onchange = (e) => ops([{ op: 'set_step', amplitude: e.target.value }]);
   $('addSelf').onclick = () => ops([{ op: 'add_contact', type: 'self', friction: 0 }]);
   $('matE').onchange = (e) => ops([{ op: 'set_material', name: 'default', E: +e.target.value }]);
