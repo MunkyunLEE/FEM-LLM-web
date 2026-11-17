@@ -506,7 +506,7 @@ def newton(sh, x, free, fext, extra=None, tol=1e-6, itmax=40):
     return x, info
 
 
-def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_step=None, tol=1e-6, time=1.0, maxcuts=12, x_init=None, amp=None):
+def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_step=None, tol=1e-6, time=1.0, maxcuts=12, x_init=None, amp=None, lam0=0.0, dl0=None):
     ndof = sh.ndof
     x = sh.x0(X) if x_init is None else x_init.copy()
     x0 = sh.x0(X)
@@ -517,8 +517,8 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
     con[sh.fixed_phi] = True
     free = np.where(~con)[0]
     hist = []
-    dl = 1.0 / nsteps
-    lam = 0.0
+    dl = min(float(dl0), 1.0 / nsteps) if dl0 else 1.0 / nsteps
+    lam = float(lam0)
     cuts = 0
     amp = amp or (lambda v: v)
     while lam < 1.0 - 1e-12:
@@ -612,7 +612,7 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
             x = sh.reset(x)
         if extra is not None:
             g = g + (extra.phys_grad(x) if hasattr(extra, "phys_grad") else extra.grad(x))
-        rec = {"lam": lam, "x": x.copy(), "reaction": g - fext * amp(lam), "iters": info["iters"]}
+        rec = {"lam": lam, "x": x.copy(), "reaction": g - fext * amp(lam), "iters": info["iters"], "dl": dl}
         hist.append(rec)
         if on_step:
             on_step(rec)
@@ -1101,7 +1101,43 @@ def _amp(kind):
     return lambda s: s
 
 
-def solve(model, spec, progress=None):
+STATE_KEYS = ("d", "pc", "ep", "al", "sig", "wp")
+
+
+def _state(obj, keys):
+    out = {}
+    for k in keys:
+        v = getattr(obj, k, None)
+        if torch.is_tensor(v):
+            out[k] = v.detach().cpu().numpy().copy()
+        elif isinstance(v, np.ndarray):
+            out[k] = v.copy()
+        elif isinstance(v, (int, float)):
+            out[k] = v
+    return out
+
+
+def _restore(obj, data):
+    for k, v in data.items():
+        cur = getattr(obj, k, None)
+        if torch.is_tensor(cur):
+            setattr(obj, k, torch.tensor(v, dtype=cur.dtype))
+        else:
+            setattr(obj, k, v)
+    if hasattr(obj, "_cache"):
+        obj._cache = None
+    if hasattr(obj, "_hs"):
+        obj._hs = None
+
+
+def solve(model, spec, progress=None, checkpoint=None, resume=None, every=300.0):
+    import pickle
+    import time as _time
+
+    ck = None
+    if resume:
+        with open(resume, "rb") as f:
+            ck = pickle.load(f)
     from ..contact import contacts_of, icosphere, plane_basis, unit, record as contact_record, view_spec
     from ..control import disp_control, record as ctl_record
     from ..loads import bc_table, lumped
@@ -1193,6 +1229,9 @@ def solve(model, spec, progress=None):
     if np.abs(M).sum() > 0 and not quad:
         msgs.append("모멘트 하중은 삼각형 요소에서 무시했습니다 (사각형 요소는 지원)")
     imp = float(st.get("imperfection") or 0)
+    if ck is not None:
+        X = np.asarray(ck["X"], float)
+        imp = 0.0
     if imp > 0:
         sh0 = make(X)
         f0 = np.zeros(sh0.ndof)
@@ -1413,7 +1452,34 @@ def solve(model, spec, progress=None):
         if progress:
             progress(lam)
 
-    h = run_static(sh, X, fixed, pres, pval, fext, n, extra=extra, on_step=on_step, time=total_time, amp=amp)
+    lam0, dl0, x_init = 0.0, None, None
+    if ck is not None:
+        _restore(sh, ck["shell"])
+        if dmp is not None and ck.get("damping"):
+            _restore(dmp, ck["damping"])
+        for k, v in ck["hist"].items():
+            hist[k] = list(v)
+        for k, v in ck["rig"].items():
+            rig[k] = list(v)
+        cforce[:] = ck["cforce"]
+        cdisp[:] = ck["cdisp"]
+        acc.update(ck["acc"])
+        res.frames = ck["frames"]
+        lam0, dl0, x_init = ck["lam"], ck["dl"], np.asarray(ck["x"], float)
+        msgs.append(f"저장된 상태(진행률 {lam0:.4g})에서 이어서 풀었습니다")
+    last = [_time.time()]
+
+    def on_step_ck(r):
+        on_step(r)
+        if checkpoint and (_time.time() - last[0] >= every or r["lam"] >= 1.0 - 1e-12):
+            data = {"X": X, "lam": r["lam"], "dl": r["dl"], "x": r["x"], "shell": _state(sh, STATE_KEYS), "damping": _state(dmp, ("vp", "dissipated")) if dmp is not None else None, "hist": hist, "rig": rig, "cforce": cforce, "cdisp": cdisp, "acc": acc, "frames": res.frames}
+            tmp = str(checkpoint) + ".tmp"
+            with open(tmp, "wb") as f:
+                pickle.dump(data, f)
+            os.replace(tmp, checkpoint)
+            last[0] = _time.time()
+
+    h = run_static(sh, X, fixed, pres, pval, fext, n, extra=extra, on_step=on_step_ck, time=total_time, amp=amp, x_init=x_init, lam0=lam0, dl0=dl0)
     if not res.frames:
         raise RuntimeError("자체 쉘 해석이 첫 증분에서 수렴하지 않았습니다. 구속과 하중을 확인하세요\n" + "\n".join(msgs))
     if h and h[-1].get("failed"):

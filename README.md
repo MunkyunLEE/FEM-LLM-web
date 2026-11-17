@@ -203,6 +203,7 @@ CalculiX 에 맡기지 않고 직접 만든 쉘 솔버입니다. "자체 쉘 솔
   - `FEMWEB_HESS=float32`: 요소 강성 행렬만 단정밀도로 계산 (약 1.5배). 잔차는 배정밀도라 수렴한 해의 정확도는 같습니다
   - `FEMWEB_DEVICE=mps`(Apple GPU) 또는 `cuda`: 요소 강성 행렬을 GPU 에서 단정밀도로 계산합니다. MPS 는 배정밀도가 없어 강성 행렬에만 씁니다
   - `scikit-sparse` 가 설치되어 있으면 CHOLMOD 촐레스키 분해를 먼저 시도합니다 (macOS: `brew install suite-sparse` 후 `pip install scikit-sparse`). 양정치가 아니면 SuperLU 로 돌아갑니다. 끄려면 `FEMWEB_CHOLMOD=0`
+- **해석 재개**: `solve(model, spec, checkpoint="ck.pkl", every=300)` 으로 몇 초마다 솔버 상태(변형, 방향 벡터, 소성 변형률, 감쇠 속도, 이력, 프레임)를 저장하고, 끊기면 `resume="ck.pkl"` 로 그 지점부터 이어서 풉니다. 이어 푼 결과는 끊김 없이 푼 결과와 같습니다(시험으로 확인)
 - **결과 화면**: 쉘을 두께만큼 띄운 양면과 옆면으로 그리고("쉘 두께" 체크), 메쉬선은 원래 사각형 모서리만 표시합니다. 결과 막대의 PNG·GIF·영상 버튼으로 지금 화면이나 전체 프레임을 저장합니다(GIF 는 Pillow 필요, 영상은 브라우저에 따라 mp4 또는 webm)
 - 예제 7c(사각관 축방향 압괴)
 

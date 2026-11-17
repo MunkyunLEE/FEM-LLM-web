@@ -331,3 +331,51 @@ def test_rules_density_exponent_and_step_time():
     assert {"op": "set_material", "name": "default", "rho": 2.7e-9} in ops
     assert all(o.get("E", 70000.0) == 70000.0 for o in ops)
     assert rules.parse("스텝 시간 0.65초", m, sp)[0] == [{"op": "set_step", "damping": {"time": 0.65}}]
+
+
+def test_checkpoint_resume_matches_uninterrupted(tmp_path):
+    pytest.importorskip("ipctk")
+    import shutil
+    from femweb.io_obj import parse_obj
+    from femweb.spec import apply_ops, default_spec
+
+    a, L, npa, nz = 40.0, 40.0, 4, 4
+    ring = []
+    for side in range(4):
+        for i in range(npa):
+            q = a * i / npa
+            ring.append([(q, 0.0), (a, q), (a - q, a), (0.0, a - q)][side])
+    m = len(ring)
+    out = []
+    for k in range(nz + 1):
+        out += [f"v {x:g} {y:g} {L * k / nz:g}" for x, y in ring]
+    for k in range(nz):
+        for i in range(m):
+            p, q = k * m + i, k * m + (i + 1) % m
+            out.append(f"f {p + 1} {q + 1} {q + m + 1} {p + m + 1}")
+    model = parse_obj("\n".join(out) + "\n", "tube.obj")
+    ops = [
+        {"op": "set_solver", "solver": "shell"},
+        {"op": "set_material", "name": "default", "E": 70000.0, "nu": 0.3, "rho": 2.7e-9, "curve": [[0.0, 240.0], [0.1, 300.0]]},
+        {"op": "set_section", "thickness": 1.0},
+        {"op": "add_bc", "dofs": [1, 2, 3, 4, 5, 6], "select": {"plane": {"axis": "z", "at": "min"}}},
+        {"op": "add_contact", "type": "rigid", "shape": "plane", "normal": [0, 0, -1.0], "motion": [0, 0, -1.2], "friction": 0.2},
+        {"op": "add_contact", "type": "self", "friction": 0.2},
+        {"op": "set_step", "type": "static", "increments": 4, "imperfection": 0.1, "damping": {"kind": "rayleigh", "zeta": 2.0}},
+    ]
+    spec, _ = apply_ops(default_spec(model), ops, model)
+    ckp = tmp_path / "ck.pkl"
+    mid = tmp_path / "mid.pkl"
+    n = [0]
+
+    def prog(lam):
+        n[0] += 1
+        if n[0] == 3:
+            shutil.copy(ckp, mid)
+
+    full = S.solve(model, spec, progress=prog, checkpoint=str(ckp), every=0.0)
+    again = S.solve(model, spec, resume=str(mid))
+    assert len(again.frames) == len(full.frames)
+    for k in ("contact.force", "energy.total", "energy.plastic"):
+        assert np.allclose(again.history[k], full.history[k], rtol=1e-6, atol=1e-6)
+    assert np.allclose(again.frames[-1]["U"], full.frames[-1]["U"], atol=1e-8)
