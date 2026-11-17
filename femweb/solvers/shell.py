@@ -836,6 +836,18 @@ class IPCContact:
         g = self.B.gradient(c, self.mesh, V).reshape(-1, 3)
         return float(0.5 * np.linalg.norm(g, axis=1).sum()), len(c), float(np.sqrt(c.compute_minimum_distance(self.mesh, V)))
 
+    def nodal(self, x):
+        V = self._V(x)
+        c = self._cols(V)
+        gn = np.zeros((self.nv, 3))
+        gt = np.zeros((self.nv, 3))
+        if len(c):
+            gn = -self.B.gradient(c, self.mesh, V).reshape(-1, 3)
+        if self.tc is not None:
+            gt = -self.Fr.gradient(self.tc, self.mesh, np.asfortranarray(V - self.Vp)).reshape(-1, 3)
+        self.tot = (0.5 * float(np.linalg.norm(gn, axis=1).sum()), 0.5 * float(np.linalg.norm(gt, axis=1).sum()))
+        return gn[: self.n], gt[: self.n]
+
     def plane_force(self, x, k=0):
         V = self._V(x)
         c = self._cols(V)
@@ -1113,7 +1125,17 @@ def solve(model, spec, progress=None):
     np.add.at(tn, T.ravel(), np.repeat(tt, 3))
     np.add.at(cn, T.ravel(), 1.0)
     res.thick = tn / np.maximum(cn, 1.0)
-    names = ("time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "vonMises.max", "energy.strain", "energy.plastic", "energy.damping", "energy.kinetic", "peeq.max", "contact.count", "contact.gap")
+    bc_dofs = {}
+    for bc in spec["bcs"]:
+        try:
+            ids = resolve(model, bc["select"])
+        except Exception:
+            continue
+        dd = np.array(sorted(3 * int(i) + d - 1 for i in ids for d in bc["dofs"] if d <= 3 and used[i]), int)
+        if len(dd):
+            bc_dofs[bc["id"]] = dd
+    area = np.maximum(sh.lumped_area(), 1e-30)
+    names = ("contact.normal", "contact.friction", "time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "vonMises.max", "energy.strain", "energy.plastic", "energy.damping", "energy.kinetic", "peeq.max", "contact.count", "contact.gap")
     hist = {k: [] for k in names}
     cforce, cdisp, rig = [], [], {i: [] for i in rigid_ids}
     cdof = np.array([3 * i + ctl["axis"] for i in ctl["nodes"]], int) if ctl else np.zeros(0, int)
@@ -1129,6 +1151,25 @@ def solve(model, spec, progress=None):
         fields = {"vonMises": vm}
         if sh.plastic is not None:
             fields["PEEQ"] = _nodal(sh, sh.al.max(1).values.numpy())
+        g = r["reaction"]
+        rf = np.zeros((sh.n, 3))
+        rf.ravel()[fixed] = g[fixed]
+        if len(pres):
+            rf.ravel()[pres] = g[pres]
+        fields["RF"] = np.linalg.norm(rf, axis=1)
+        if ipc is not None:
+            cn, ctg = ipc.nodal(x)
+            fn = np.linalg.norm(cn, axis=1)
+            fields["CFORCE"] = np.linalg.norm(cn + ctg, axis=1)
+            fields["CPRESS"] = fn / area
+            hist["contact.normal"].append(ipc.tot[0])
+            hist["contact.friction"].append(ipc.tot[1])
+        else:
+            hist["contact.normal"].append(0.0)
+            hist["contact.friction"].append(0.0)
+        for bid, dd in bc_dofs.items():
+            for c, nm in enumerate("xyz"):
+                hist.setdefault(f"reaction.{bid}.{nm}", []).append(float(g[dd[dd % 3 == c]].sum()))
         res.add_frame(f"진행률 {lam:.4g}", lam, U, fields)
         hist["energy.plastic"].append(sh.wp if sh.plastic is not None else 0.0)
         hist["peeq.max"].append(float(sh.al.max()) if sh.plastic is not None else 0.0)
@@ -1179,8 +1220,14 @@ def solve(model, spec, progress=None):
         res.summary["감쇠 소산 에너지 (N·mm)"] = dmp.dissipated
         res.summary["감쇠 소산 / (변형 + 소성) 에너지"] = round(ratio, 5)
         msgs.append(f"감쇠가 소산한 에너지는 변형 에너지와 소성 소산의 합의 {100 * ratio:.3g}% 입니다" + (". 5%를 넘으면 감쇠가 결과에 영향을 주므로 스텝 시간을 늘리거나 감쇠비를 줄이세요" if ratio > 0.05 else ""))
+    for bid in bc_dofs:
+        res.summary[f"반력 {bid} (N)"] = [round(hist[f"reaction.{bid}.{nm}"][-1], 4) for nm in "xyz"]
     if ipc is not None:
         res.summary["접촉 쌍 수 (끝)"] = int(hist["contact.count"][-1])
+        res.summary["접촉 수직력 합 (N, 끝)"] = round(hist["contact.normal"][-1], 4)
+        if ipc.mu > 0:
+            res.summary["접촉 마찰력 합 (N, 끝)"] = round(hist["contact.friction"][-1], 4)
+        msgs.append("접촉 수직력 합은 맞닿은 두 면 중 한쪽이 받는 힘의 합이고, CPRESS 는 절점 접촉 수직력을 절점 담당 면적으로 나눈 값입니다")
         if rigid_ids:
             contact_record(res, spec, hist["time"], rig)
     if ctl:

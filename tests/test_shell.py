@@ -161,6 +161,11 @@ def test_adapter_tube_with_contact_and_damping():
     assert abs(k - 70000.0 * 160.0 / 120.0) < 0.1 * 70000.0 * 160.0 / 120.0
     assert r.summary["감쇠 소산 / (변형 + 소성) 에너지"] < 0.01
     assert len(r.frames) >= 4
+    top = r.history["reaction.bc2.x"]
+    assert len(top) == len(r.frames)
+    assert abs(r.history["reaction.bc1.z"][-1] + r.history["control.force"][-1] * -1) < 0.02 * abs(r.history["control.force"][-1]) or abs(r.history["reaction.bc1.z"][-1] - r.history["control.force"][-1]) < 0.02 * abs(r.history["control.force"][-1])
+    assert "RF" in r.frames[-1]["fields"] and "CPRESS" in r.frames[-1]["fields"]
+    assert r.history["contact.normal"][-1] == 0.0
 
 
 def test_rules_shell_sentences():

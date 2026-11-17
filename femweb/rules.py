@@ -527,10 +527,19 @@ def parse_plot(c, model, spec, ctx):
         if not hit or re.search(r"총|전체|토탈|total|변형", t):
             series.insert(0, {"quantity": "energy.total"})
         title.append("에너지")
-    if re.search(r"반력|reaction", t):
+    if re.search(r"접촉\s*(?:수직)?\s*(?:력|반력|하중)|contact\s*force", t):
+        series.append({"quantity": "contact.normal"})
+        if re.search(r"마찰|friction", t):
+            series.append({"quantity": "contact.friction"})
+        title.append("접촉력")
+    elif re.search(r"마찰\s*력|friction\s*force", t):
+        series.append({"quantity": "contact.friction"})
+        title.append("마찰력")
+    elif re.search(r"반력|reaction", t):
         a = axm.group(1) if axm else "z"
-        series.append({"quantity": f"reaction.{a}"})
-        title.append("반력")
+        b = re.search(r"(?<![a-z])(bc\d+)", t)
+        series.append({"quantity": f"reaction.{b.group(1)}.{a}" if b else f"reaction.{a}"})
+        title.append("반력" + (f" {b.group(1)}" if b else ""))
     if re.search(r"응력|stress|미세스|미제스|mises", t):
         series.append({"quantity": "vonMises", "select": sel, "reduce": "max"} if sel else {"quantity": "vonMises.max"})
         title.append("응력")

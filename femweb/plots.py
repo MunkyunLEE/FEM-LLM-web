@@ -23,6 +23,8 @@ LABELS = {
     "u.max": "최대 변위 (mm)",
     "contact.disp": "강체 이동량 (mm)",
     "contact.force": "접촉력 (N)",
+    "contact.normal": "접촉 수직력 합 (N)",
+    "contact.friction": "접촉 마찰력 합 (N)",
     "control.disp": "제어 변위 (mm)",
     "control.force": "제어점 하중 (N)",
     "stability.negative": "음의 고유치 수",
@@ -51,7 +53,11 @@ def _series(result, model, q):
     if name == "frame":
         return np.arange(1, len(result.frames) + 1, dtype=float), "프레임"
     if name in result.history:
-        return np.array(result.history[name], dtype=float), LABELS.get(name, name)
+        lab = LABELS.get(name)
+        if lab is None and name.startswith("reaction.") and name.count(".") == 2:
+            _, bid, cc = name.split(".")
+            lab = f"반력 {bid} {cc} (N)"
+        return np.array(result.history[name], dtype=float), lab or name
     key = name.lower()
     comp = str(q.get("comp", "")).lower()
     if key == "u" and comp in ("x", "y", "z"):
@@ -74,7 +80,7 @@ def _series(result, model, q):
             out.append(float(np.abs(v).max()))
         else:
             out.append(float(v.max()))
-    unit = "MPa" if field.startswith("S") or field == "vonMises" else "mm" if field.startswith("U") else ""
+    unit = "MPa" if field.startswith("S") or field in ("vonMises", "CPRESS") else "mm" if field.startswith("U") else "N" if field in ("RF", "CFORCE") else ""
     where = describe(q["select"]) if q.get("select") else "전체"
     return np.array(out), f"{field} {red} @ {where}" + (f" ({unit})" if unit else "")
 

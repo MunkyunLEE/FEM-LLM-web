@@ -93,7 +93,7 @@ OPS:
  {"op":"set_step","damping":{"kind":"none"|"mass"|"stiffness"|"rayleigh","zeta":percent,"time":seconds},"amplitude":"linear"|"smooth"}   damping ratio at modes 1 and 2 (solver shell only); time 0 = automatic
  {"op":"set_divisions","divisions":int}
  {"op":"add_plot","title":str,"x":QUANTITY,"series":[QUANTITY,...]}
-QUANTITY: {"quantity": "time"|"frame"|"energy.total"|"energy.bar"|"energy.bend"|"energy.fold"|"reaction.x"|"reaction.y"|"reaction.z"|"u.max"|"vonMises.max"|"fold.mean"|"buckling.factor"|"frequency"|"control.disp"|"control.force"|"contact.disp"|"contact.force"}
+QUANTITY: {"quantity": "time"|"frame"|"energy.total"|"energy.bar"|"energy.bend"|"energy.fold"|"reaction.x"|"reaction.y"|"reaction.z"|"u.max"|"vonMises.max"|"fold.mean"|"buckling.factor"|"frequency"|"control.disp"|"control.force"|"contact.disp"|"contact.force"|"contact.normal"|"contact.friction"|"reaction.<bc id>.x|y|z"}   (the last three: solver shell only; nodal fields RF, CFORCE, CPRESS also exist there)
        or nodal: {"quantity":"u"|"ux"|"uy"|"uz"|"vonMises","select":SELECT,"reduce":"max"|"min"|"mean"|"absmax"}
  "time" means the load factor / pseudo time of the static step.
 
