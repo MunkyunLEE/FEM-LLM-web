@@ -473,7 +473,12 @@ def export_gif(req: GifReq):
     for d in req.frames[:400]:
         raw = base64.b64decode(d.split(",", 1)[-1])
         ims.append(Image.open(io.BytesIO(raw)).convert("RGB"))
-    pal = ims[len(ims) // 2].quantize(colors=255, method=Image.Quantize.MEDIANCUT)
+    pick = ims[:: max(1, len(ims) // 6)] + [ims[-1]]
+    w, h = ims[0].size
+    sheet = Image.new("RGB", (w * len(pick), h))
+    for k, im in enumerate(pick):
+        sheet.paste(im.resize((w, h)), (k * w, 0))
+    pal = sheet.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
     out = [im.quantize(palette=pal, dither=Image.Dither.FLOYDSTEINBERG) for im in ims]
     buf = io.BytesIO()
     dur = int(1000 / max(1.0, min(30.0, req.fps)))
