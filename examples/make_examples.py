@@ -51,6 +51,25 @@ def shell_panel(a=200.0, n=10):
     write("square_tube.obj", "\n".join(out) + "\n")
 
 
+def square_tube_fine(a=40.0, L=120.0, npa=20):
+    nz = int(round(npa * L / a))
+    ring = []
+    for side in range(4):
+        for i in range(npa):
+            q = a * i / npa
+            ring.append([(q, 0.0), (a, q), (a - q, a), (0.0, a - q)][side])
+    m = len(ring)
+    out = [f"# square tube 40x40x120, {npa} quads per wall"]
+    for k in range(nz + 1):
+        for x, y in ring:
+            out.append(f"v {x:g} {y:g} {L * k / nz:g}")
+    for k in range(nz):
+        for i in range(m):
+            p0, q0 = k * m + i, k * m + (i + 1) % m
+            out.append(f"f {p0 + 1} {q0 + 1} {q0 + m + 1} {p0 + m + 1}")
+    write("square_tube_fine.obj", "\n".join(out) + "\n")
+
+
 def cylinder_shell(R=50.0, L=200.0, nc=48, na=40):
     out = ["# cylindrical shell R=50 L=200", "g cylinder"]
     for j in range(na + 1):
@@ -293,6 +312,22 @@ PRESETS = {
             {"op": "add_contact", "type": "self", "friction": 0.2},
         ],
     },
+    "tube_platen": {
+        "title": "7d. 사각관 강체 누름판 압축 (길이 절반, 에너지 분해)",
+        "file": "square_tube_fine.obj",
+        "note": "40x40x120 알루미늄 사각관(t=1, 벽당 20분할 2 mm 요소)을 위 끝 구속 없이 강체 평면(누름판)으로 60 mm(길이의 절반) 누릅니다. 아래 끝 완전 고정, 누름판·자기 접촉 마찰 0.2, 레일리 감쇠 2%(스텝 시간 0.65 s = 1차 주기의 1000배, 감쇠 소산이 외부 일의 5% 미만이 되도록), 1차 좌굴 모드 0.2 mm 초기 결함. 누름판 반력-변위와 탄성·소성·감쇠·마찰 에너지, 총 에너지를 그립니다. 2코어 기준 약 3시간",
+        "prompts": ["자체 쉘 솔버로", "E 70000, 포아송비 0.3, 밀도 2.7e-9", "소성 곡선 240@0, 275@0.02, 300@0.06, 330@0.2", "아래 완전 고정", "위에서 강체 평면을 아래로 60 mm 눌러, 마찰 0.2", "자기 접촉 추가 마찰 0.2", "레일리 감쇠 2%, 스텝 시간 0.65초", "증분 150, 초기결함 0.2", "해석 실행"],
+        "ops": [
+            {"op": "set_solver", "solver": "shell"},
+            {"op": "set_material", "name": "default", "E": 70000.0, "nu": 0.3, "rho": 2.7e-9, "curve": [[0.0, 240.0], [0.02, 275.0], [0.06, 300.0], [0.2, 330.0]]},
+            {"op": "set_section", "group": "*", "thickness": 1.0},
+            {"op": "add_bc", "name": "아래 완전 고정", "dofs": [1, 2, 3, 4, 5, 6], "select": {"plane": {"axis": "z", "at": "min"}}},
+            {"op": "add_contact", "type": "rigid", "shape": "plane", "normal": [0, 0, -1.0], "motion": [0, 0, -60.0], "friction": 0.2},
+            {"op": "add_contact", "type": "self", "friction": 0.2},
+            {"op": "set_step", "type": "static", "increments": 150, "imperfection": 0.2, "damping": {"kind": "rayleigh", "zeta": 2.0, "time": 0.65}},
+            {"op": "add_plot", "title": "에너지-누름판 변위", "x": {"quantity": "contact.disp"}, "series": [{"quantity": "energy.strain"}, {"quantity": "energy.plastic"}, {"quantity": "energy.damping"}, {"quantity": "energy.friction"}, {"quantity": "energy.total"}, {"quantity": "energy.external"}]},
+        ],
+    },
     "cantilever_solid": {
         "title": "5a. 캔틸레버 빔 (솔리드 요소)",
         "file": "cantilever_solid.stl",
@@ -322,6 +357,7 @@ PRESETS = {
 if __name__ == "__main__":
     cantilever_beam()
     shell_panel()
+    square_tube_fine()
     cylinder_shell()
     panel_chain()
     miura()

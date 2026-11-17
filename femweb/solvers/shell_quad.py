@@ -1,8 +1,11 @@
+import copy
+import os
+
 import numpy as np
 import scipy.sparse as sp
 import torch
 
-from .shell import GAUSS5, Hardening, _return_map
+from .shell import GAUSS5, Hardening, _return_map, set_threads
 
 GP = 1.0 / 3.0**0.5
 XI = np.array([[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]])
@@ -24,7 +27,7 @@ def _rot(th, v):
 
 class QuadShell:
     def __init__(self, X, quads, E, nu, t, rot_fixed=None, plastic=None, kink_deg=20.0):
-        torch.set_num_threads(1)
+        set_threads()
         X = np.asarray(X, float)
         Q = np.asarray(quads, int)
         ne = len(Q)
@@ -166,7 +169,34 @@ class QuadShell:
         return x
 
     def _u(self, x):
-        return torch.tensor(np.asarray(x, float)[self.dof])
+        dt = getattr(self, "_dt", torch.float64)
+        v = np.asarray(x, float)[self.dof]
+        return torch.tensor(v.astype(np.float32) if dt == torch.float32 else v, dtype=dt, device=getattr(self, "_dev", "cpu"))
+
+    def _hshadow(self):
+        if getattr(self, "_is_shadow", False):
+            return None
+        dev = os.environ.get("FEMWEB_DEVICE", "cpu").lower()
+        prec = os.environ.get("FEMWEB_HESS", "float64" if dev == "cpu" else "float32").lower()
+        if dev == "cpu" and prec == "float64":
+            return None
+        if getattr(self, "_hs", None) is None:
+            dt = torch.float32 if prec == "float32" else torch.float64
+            s = copy.copy(self)
+            s._is_shadow = True
+            s._hs = None
+            s._cache = None
+            for k, v in vars(self).items():
+                if torch.is_tensor(v):
+                    setattr(s, k, v.to(device=dev, dtype=dt) if v.is_floating_point() else v.to(device=dev))
+            if self.plastic is not None:
+                hp = copy.copy(self.plastic)
+                for k in ("ep", "sy", "sl"):
+                    setattr(hp, k, getattr(self.plastic, k).to(device=dev, dtype=dt))
+                s.plastic = hp
+            s._dev, s._dt = dev, dt
+            self._hs = s
+        return self._hs
 
     def _kin(self, u):
         ne = u.shape[0]
@@ -250,6 +280,12 @@ class QuadShell:
         c = self._cache
         if c is not None and c[0] == key and (c[2] is not None or not second):
             return c[1], c[2]
+        hs = self._hshadow() if second else None
+        if hs is not None:
+            g = self._gh(x, False)[0]
+            H = hs._gh(x, True)[1].astype(float)
+            self._cache = (key, g, H)
+            return g, H
         u = self._u(x).clone().requires_grad_(True)
         if self.plastic is None:
             g = torch.autograd.grad(self._energy_t(u).sum(), u, create_graph=second)[0]
@@ -261,9 +297,9 @@ class QuadShell:
             g = g + torch.autograd.grad(self._extra_energy(gam, dr).sum(), u, create_graph=second)[0]
         H = None
         if second:
-            H = torch.stack([torch.autograd.grad(g[:, i].sum(), u, retain_graph=True)[0] for i in range(24)], 1).numpy()
+            H = torch.stack([torch.autograd.grad(g[:, i].sum(), u, retain_graph=True)[0] for i in range(24)], 1).detach().cpu().numpy()
             H = 0.5 * (H + H.transpose(0, 2, 1))
-        g = g.detach().numpy()
+        g = g.detach().cpu().numpy()
         self._cache = (key, g, H)
         return g, H
 
@@ -289,6 +325,7 @@ class QuadShell:
             self.d = d / torch.linalg.norm(d, dim=-1, keepdim=True)
             self.pc = u[:, :12].reshape(-1, 4, 3).clone()
         self._cache = None
+        self._hs = None
 
     def lumped_area(self):
         a = np.zeros(self.n)

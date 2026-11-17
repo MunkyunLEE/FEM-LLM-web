@@ -784,6 +784,11 @@ def parse_clause(text, model, spec, ctx):
                 dm["time"] = _f(m)
         c.takeall(r"감쇠비?|댐핑|damping|비례|1\s*[,·]?\s*2\s*차|모드|기준|에\s*대해|추가|넣어|설정|적용|켜")
         st["damping"] = dm
+    elif c.has(r"스텝\s*시간|step\s*time"):
+        m = c.take(r"(?:스텝\s*시간|step\s*time)\s*(?:은|는|을|를|=)?\s*" + NUM + r"\s*(?:s|초|sec)(?![a-z])")
+        if m:
+            st["damping"] = {"time": _f(m)}
+            c.takeall(r"으로|로|설정|바꿔|변경|해줘|해")
     if c.take(r"(?:사각형|쿼드|4\s*절점|quad)\s*(?:쉘|셸)?\s*(?:요소|element)\s*(?:으로|로)?"):
         st["element"] = "quad"
     elif c.take(r"(?:삼각형|3\s*절점|tri(?:angle)?)\s*(?:쉘|셸)?\s*(?:요소|element)\s*(?:으로|로)?"):
@@ -869,7 +874,7 @@ def parse_clause(text, model, spec, ctx):
             mat.update({"E": E, "nu": nu, "rho": rho})
             mname = nm
             break
-    m = c.take(r"(?:탄성\s*계수|영률|영\s*계수|young'?s?\s*modulus|elastic modulus|(?<![a-z])e(?![a-z]))\s*(?:를|을|은|는|=|:)?\s*" + NUM + r"\s*(gpa|mpa|kpa)?")
+    m = c.take(r"(?:탄성\s*계수|영률|영\s*계수|young'?s?\s*modulus|elastic modulus|(?<![a-z0-9.])e(?![a-z]))\s*(?:를|을|은|는|=|:)?\s*" + NUM + r"\s*(gpa|mpa|kpa)?")
     if m:
         mat["E"] = _f(m) * {"gpa": 1e3, "mpa": 1.0, "kpa": 1e-3, None: 1.0}[m.group(2)]
     m = c.take(r"(?:포아송\s*비?|푸아송\s*비?|프와송\s*비?|poisson'?s?\s*(?:ratio)?|(?<![a-z])nu(?![a-z])|ν)\s*(?:를|을|은|는|=|:)?\s*" + NUM)

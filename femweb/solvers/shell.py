@@ -1,4 +1,5 @@
 import copy
+import os
 
 import numpy as np
 import scipy.sparse as sp
@@ -185,9 +186,17 @@ def _return_map(e, ep, al, E, nu, hard):
     return sig, epn, aln
 
 
+def set_threads():
+    v = os.environ.get("FEMWEB_THREADS", "auto").lower()
+    n = max(1, min(4, (os.cpu_count() or 2) // 2)) if v == "auto" else max(1, int(v))
+    if torch.get_num_threads() != n:
+        torch.set_num_threads(n)
+    return n
+
+
 class Shell:
     def __init__(self, X, tris, E, nu, t, clamped=None, plastic=None):
-        torch.set_num_threads(1)
+        set_threads()
         X = np.asarray(X, float)
         tris = np.asarray(tris, int)
         self.n = len(X)
@@ -366,14 +375,45 @@ class Shell:
         return a
 
 
+class _Fac:
+    def __init__(self, H):
+        H = H.tocsc()
+        self.H = H
+        self.ch = None
+        if os.environ.get("FEMWEB_CHOLMOD", "1") != "0":
+            try:
+                from sksparse.cholmod import cholesky
+
+                self.ch = cholesky(H)
+                self.lu = None
+                return
+            except Exception:
+                self.ch = None
+        try:
+            self.lu = spla.splu(H, permc_spec="MMD_AT_PLUS_A", options=dict(SymmetricMode=True))
+        except Exception:
+            self.lu = None
+
+    def solve(self, r):
+        if self.ch is not None:
+            return self.ch(r)
+        if self.lu is not None:
+            return self.lu.solve(r)
+        return _solve(self.H, r)
+
+
 def _solve(H, r):
+    try:
+        return spla.splu(H.tocsc(), permc_spec="MMD_AT_PLUS_A", options=dict(SymmetricMode=True)).solve(r)
+    except Exception:
+        pass
     try:
         return spla.spsolve(H.tocsc(), r)
     except Exception:
         return spla.lsqr(H, r)[0]
 
 
-def newton(sh, x, free, fext, extra=None, tol=1e-6, itmax=25):
+def newton(sh, x, free, fext, extra=None, tol=1e-6, itmax=40):
     x = x.copy()
     fscale = max(np.linalg.norm(fext[free]), 1e-12)
     info = {"iters": 0, "converged": False}
@@ -394,6 +434,8 @@ def newton(sh, x, free, fext, extra=None, tol=1e-6, itmax=25):
     con = np.ones(len(x), bool)
     con[free] = False
     bad = 0
+    fac = None
+    reuse = False
     for it in range(itmax):
         r = g[free]
         nr = np.linalg.norm(r)
@@ -405,34 +447,61 @@ def newton(sh, x, free, fext, extra=None, tol=1e-6, itmax=25):
         if nr <= max(tol * ref, sh.floor):
             info["converged"] = True
             break
-        H = sh.hess(x)
-        if extra is not None:
-            H = H + extra.hess(x)
-        Hf = H[free][:, free]
-        dx = _solve(Hf, -r)
-        if not np.all(np.isfinite(dx)) or dx @ r > 0:
-            dx = _solve(Hf + sp.identity(len(free)) * (abs(Hf.diagonal()).mean() * 1e-3), -r)
+        dx = None
+        if fac is not None and reuse:
+            dx = fac.solve(-r)
+            if not np.all(np.isfinite(dx)) or dx @ r >= 0:
+                dx = None
+        fresh = dx is None
+        if fresh:
+            H = sh.hess(x)
+            if extra is not None:
+                H = H + extra.hess(x)
+            Hf = H[free][:, free]
+            fac = _Fac(Hf)
+            dx = fac.solve(-r)
+            if not np.all(np.isfinite(dx)) or dx @ r > 0:
+                fac = _Fac(Hf + sp.identity(len(free)) * (abs(Hf.diagonal()).mean() * 1e-3))
+                dx = fac.solve(-r)
+            info["fresh"] = info.get("fresh", 0) + 1
+        lim = 1.0
         if extra is not None and hasattr(extra, "limit"):
-            dx = dx * extra.limit(x, free, dx)
+            lim = extra.limit(x, free, dx)
+            dx = dx * lim
         pd = getattr(sh, "plastic", None) is not None
         e0 = 0.0 if pd else total(x)
+        if pd:
+            gs0 = (sh.grad(x) - fext)[free]
+            ex0 = extra.energy(x) if extra is not None else 0.0
         a = 1.0
         ok = False
         for _ in range(12):
             xn = x.copy()
             xn[free] += a * dx
             gn = resid(xn)
-            if np.isfinite(gn).all() and (np.linalg.norm(gn[free]) < nr or (not pd and total(xn) < e0) or (pd and abs(gn[free] @ dx) < 0.9 * abs(r @ dx))):
-                ok = True
-                break
+            if np.isfinite(gn).all():
+                if np.linalg.norm(gn[free]) < nr or (not pd and total(xn) < e0):
+                    ok = True
+                    break
+                if pd:
+                    gsn = (sh.grad(xn) - fext)[free]
+                    dm = 0.5 * (gs0 + gsn) @ (a * dx) + ((extra.energy(xn) if extra is not None else 0.0) - ex0)
+                    if np.isfinite(dm) and dm < 1e-4 * a * (r @ dx):
+                        ok = True
+                        break
             a *= 0.5
         if not ok:
+            if not fresh:
+                reuse = False
+                continue
             bad += 1
             if bad >= 2:
                 break
             xn = x.copy()
             xn[free] += a * dx
             gn = resid(xn)
+        rn = np.linalg.norm(gn[free])
+        reuse = ok and a == 1.0 and lim >= 1.0 and rn < (0.25 if fresh else 0.5) * nr
         x, g = xn, gn
     return x, info
 
@@ -466,31 +535,57 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
                 extra.begin(x)
         if extra is not None and hasattr(extra, "set_factor"):
             extra.set_factor(amp(lt))
+        fol = extra is not None and hasattr(extra, "follow")
+        xb = x
+        if fol:
+            xf = extra.follow(x, amp(lam), amp(lt))
+            pdofs = np.intersect1d(np.where(xf != x)[0], free)
+            if len(pdofs):
+                extra.set_factor(amp(lam))
+                Hk = sh.hess(x) + extra.hess(x)
+                gk = sh.grad(x) - fext * amp(lt) + extra.grad(x)
+                extra.set_factor(amp(lt))
+                fr2 = np.setdiff1d(free, pdofs)
+                dup = np.zeros(ndof)
+                dup[pdofs] = xf[pdofs] - x[pdofs]
+                dup[fr2] = _Fac(Hk[fr2][:, fr2]).solve(-(gk + Hk @ dup)[fr2])
+                if np.isfinite(dup).all():
+                    xb = x + dup
         if extra is not None and hasattr(extra, "fraction"):
-            a = extra.fraction(x, x)
+            a = extra.fraction(x, xb)
             if a < 1.0:
                 lt = lam + a * (lt - lam)
                 if len(pres_dofs):
                     xt[pres_dofs] = x0[pres_dofs] + amp(lt) * np.asarray(pres_vals)
                 extra.set_factor(amp(lt))
+                if fol:
+                    xb = x + a * (xb - x)
         if lt - lam < 1e-12:
             hist.append({"lam": lam, "failed": True})
             break
+        if fol:
+            xt = xb.copy()
+            if len(pres_dofs):
+                xt[pres_dofs] = x0[pres_dofs] + amp(lt) * np.asarray(pres_vals)
         try:
-            g0 = sh.grad(x) - fext * amp(lt)
-            H0 = sh.hess(x)
+            if fol and xb is not x:
+                raise StopIteration
+            g0 = sh.grad(xb) - fext * amp(lt)
+            H0 = sh.hess(xb)
             if extra is not None:
-                g0 = g0 + extra.grad(x)
-                H0 = H0 + extra.hess(x)
-            du = xt - x
+                g0 = g0 + extra.grad(xb)
+                H0 = H0 + extra.hess(xb)
+            du = xt - xb
             du[free] = _solve(H0[free][:, free], -(g0 + H0 @ du)[free])
             if np.isfinite(du).all():
-                a = extra.limit(x, np.arange(ndof), du) if extra is not None and hasattr(extra, "limit") else 1.0
+                a = extra.limit(xb, np.arange(ndof), du) if extra is not None and hasattr(extra, "limit") else 1.0
                 if a >= 1.0:
-                    xt = x + du
+                    xt = xb + du
+                elif fol:
+                    xt = xb + a * du
                 elif a > 1e-6:
                     lt = lam + a * (lt - lam)
-                    xt = x + a * du
+                    xt = xb + a * du
                     if len(pres_dofs):
                         xt[pres_dofs] = x0[pres_dofs] + amp(lt) * np.asarray(pres_vals)
                     if hasattr(extra, "set_factor"):
@@ -521,7 +616,7 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
         hist.append(rec)
         if on_step:
             on_step(rec)
-        if info["iters"] <= 9:
+        if info["iters"] <= 9 or info.get("fresh", 0) <= 4:
             dl = min(dl * 1.5, 1.0 / nsteps)
     return hist
 
@@ -664,6 +759,12 @@ class Extras:
             if hasattr(p, "set_factor"):
                 p.set_factor(lam)
 
+    def follow(self, x, lam0, lam1):
+        for p in self.parts:
+            if hasattr(p, "follow"):
+                x = p.follow(x, lam0, lam1)
+        return x
+
     def fraction(self, x0, x1):
         a = 1.0
         for p in self.parts:
@@ -738,6 +839,12 @@ class IPCContact:
             for j in s_:
                 if i < j:
                     blocked[(i, j)] = False
+        from scipy.spatial import cKDTree
+
+        el = np.stack([np.linalg.norm(sh.X[tris[:, a]] - sh.X[tris[:, b]], axis=1) for a, b in ((0, 1), (1, 2), (2, 0))], 1).min(1)
+        self.rblock = self.dmin + self.dhat + 2.0 * float(np.median(el))
+        for i, j in cKDTree(sh.X).query_pairs(self.rblock):
+            blocked[(min(i, j), max(i, j))] = False
         filt = ipctk.make_sparse_filter(blocked, True)
         gid = np.arange(self.nv, dtype=np.int32)
         if groups is not None:
@@ -751,7 +858,7 @@ class IPCContact:
         self.kappa = 2e-3 * float(sh.E.mean()) * tmean if stiffness is None else float(stiffness)
         self.B = ipctk.BarrierPotential(self.dhat, self.kappa, True)
         self.mu = float(mu)
-        self.eps_v = 1e-3 * tmean if eps_v is None else eps_v
+        self.eps_v = 0.1 * tmean if eps_v is None else eps_v
         self.Fr = ipctk.FrictionPotential(self.eps_v)
         self.ccd = ipctk.AdditiveCCD(10000, 0.9)
         self.tc = None
@@ -855,6 +962,39 @@ class IPCContact:
             gt = -self.Fr.gradient(self.tc, self.mesh, np.asfortranarray(V - self.Vp)).reshape(-1, 3)
         self.tot = (0.5 * float(np.linalg.norm(gn, axis=1).sum()), 0.5 * float(np.linalg.norm(gt, axis=1).sum()))
         return gn[: self.n], gt[: self.n]
+
+    def follow(self, x, lam0, lam1):
+        P = x[: self.sh.nx].reshape(-1, 3)
+        out = x.copy()
+        Q = out[: self.sh.nx].reshape(-1, 3)
+        reach = self.dmin + 2.0 * self.dhat
+        for ob, nodes in zip(self.planes, self.pl_nodes):
+            mv = np.asarray(ob.get("motion", [0.0, 0.0, 0.0]), float)
+            if not np.any(mv):
+                continue
+            V = self.rest[nodes] + lam0 * mv
+            if len(V) == 4:
+                nn = np.cross(V[1] - V[0], V[2] - V[0])
+                nn = nn / np.linalg.norm(nn)
+                dist = np.abs((P - V[0]) @ nn)
+            else:
+                c = V.mean(0)
+                dist = np.abs(np.linalg.norm(P - c, axis=1) - np.linalg.norm(V - c, axis=1).mean())
+            hit = dist < reach
+            Q[hit] += (lam1 - lam0) * mv
+        return out
+
+    def barrier_energy(self, x):
+        V = self._V(x)
+        c = self._cols(V)
+        return float(self.B(c, self.mesh, V)) if len(c) else 0.0
+
+    def friction_work(self, x):
+        if self.tc is None or self.Vp is None:
+            return 0.0
+        V = self._V(x)
+        dV = np.asfortranarray(V - self.Vp)
+        return float(self.Fr.gradient(self.tc, self.mesh, dV) @ dV.ravel())
 
     def plane_force(self, x, k=0):
         V = self._V(x)
@@ -1066,6 +1206,19 @@ def solve(model, spec, progress=None):
         if np.abs(f0).sum() == 0 and len(pres):
             fx0 = np.setdiff1d(fx0, pres)
             pd, pv = pres, pval
+        elif np.abs(f0).sum() == 0:
+            mvs = [np.asarray(c.get("motion", [0, 0, 0]), float) for c in contacts_of(orig) if c["type"] == "rigid" and c.get("shape") == "plane"]
+            mvs = [m for m in mvs if np.linalg.norm(m) > 0]
+            if mvs:
+                m = mvs[0] / np.linalg.norm(mvs[0])
+                ax = int(np.argmax(np.abs(m)))
+                s = -(X @ m)
+                s[~used] = -np.inf
+                top = np.where(s >= s.max() - 1e-6 * model.diag())[0]
+                f0[3 * top + ax] = np.sign(m[ax])
+                lat = [3 * int(i) + c for i in top for c in range(3) if c != ax]
+                fx0 = np.array(sorted(set(fx0.tolist()) | set(lat)), int)
+                msgs.append(f"초기 결함 모드는 강체 판이 처음 닿는 끝단 절점 {len(top)}개에 판 이동 방향 하중을 걸고 그 절점의 옆 방향을 막은 선형 좌굴로 구했습니다")
         fac, modes = linear_buckling(sh0, fx0, pd, pv, f0, k=1)
         if modes:
             X = X + imp * modes[0]
@@ -1172,8 +1325,9 @@ def solve(model, spec, progress=None):
         if len(dd):
             bc_dofs[bc["id"]] = dd
     area = np.maximum(sh.lumped_area(), 1e-30)
-    names = ("contact.normal", "contact.friction", "time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "vonMises.max", "energy.strain", "energy.plastic", "energy.damping", "energy.kinetic", "peeq.max", "contact.count", "contact.gap")
+    names = ("contact.normal", "contact.friction", "time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "vonMises.max", "energy.strain", "energy.plastic", "energy.damping", "energy.kinetic", "peeq.max", "contact.count", "contact.gap", "energy.friction", "energy.contact", "energy.total", "energy.external")
     hist = {k: [] for k in names}
+    acc = {"fr": 0.0, "w": 0.0, "f": None, "d": None}
     cforce, cdisp, rig = [], [], {i: [] for i in rigid_ids}
     cdof = np.array([3 * i + ctl["axis"] for i in ctl["nodes"]], int) if ctl else np.zeros(0, int)
     moving = np.concatenate([fixed, pres]).astype(int)
@@ -1221,6 +1375,12 @@ def solve(model, spec, progress=None):
         hist["energy.damping"].append(dmp.dissipated if dmp else 0.0)
         hist["energy.kinetic"].append(dmp.kinetic() if dmp else 0.0)
         if ipc is not None:
+            acc["fr"] += ipc.friction_work(x)
+            hist["energy.contact"].append(ipc.barrier_energy(x))
+        else:
+            hist["energy.contact"].append(0.0)
+        hist["energy.friction"].append(acc["fr"])
+        if ipc is not None:
             _, cnt, gap = ipc.force(x)
             hist["contact.count"].append(float(cnt))
             hist["contact.gap"].append(float(gap) if np.isfinite(gap) else 0.0)
@@ -1232,6 +1392,24 @@ def solve(model, spec, progress=None):
         if ctl:
             cforce.append(ctl["sign"] * float(g[cdof].sum()))
             cdisp.append(lam * ctl["amp"])
+        fl, dl_ = [], []
+        if ipc is not None:
+            for cid in rigid_ids:
+                mv = np.asarray(next(c for c in cs if c["id"] == cid).get("motion", [0, 0, 0]), float)
+                fl.append(np.asarray(rig[cid][-1], float))
+                dl_.append(amp(lam) * mv)
+        if len(pres):
+            fl.append(g[pres])
+            dl_.append(x[pres] - X.ravel()[pres])
+        fl.append(fext[: sh.nx] * amp(lam))
+        dl_.append(x[: sh.nx] - X.ravel())
+        cur_f, cur_d = np.concatenate(fl), np.concatenate(dl_)
+        pf = np.zeros_like(cur_f) if acc["f"] is None else acc["f"]
+        pd_ = np.zeros_like(cur_d) if acc["d"] is None else acc["d"]
+        acc["w"] += float(0.5 * (cur_f + pf) @ (cur_d - pd_))
+        acc["f"], acc["d"] = cur_f, cur_d
+        hist["energy.external"].append(acc["w"])
+        hist["energy.total"].append(hist["energy.strain"][-1] + hist["energy.plastic"][-1] + hist["energy.damping"][-1] + hist["energy.kinetic"][-1] + hist["energy.friction"][-1] + hist["energy.contact"][-1])
         if progress:
             progress(lam)
 
@@ -1257,6 +1435,14 @@ def solve(model, spec, progress=None):
         res.summary["감쇠 소산 에너지 (N·mm)"] = dmp.dissipated
         res.summary["감쇠 소산 / (변형 + 소성) 에너지"] = round(ratio, 5)
         msgs.append(f"감쇠가 소산한 에너지는 변형 에너지와 소성 소산의 합의 {100 * ratio:.3g}% 입니다" + (". 5%를 넘으면 감쇠가 결과에 영향을 주므로 스텝 시간을 늘리거나 감쇠비를 줄이세요" if ratio > 0.05 else ""))
+    wext = hist["energy.external"][-1]
+    res.summary["외부 일 (N·mm)"] = wext
+    res.summary["총 에너지 (N·mm)"] = hist["energy.total"][-1]
+    if abs(wext) > 1e-12:
+        res.summary["에너지 균형 오차 (총 에너지 / 외부 일 - 1)"] = round(hist["energy.total"][-1] / wext - 1.0, 5)
+    if ipc is not None and ipc.mu > 0:
+        res.summary["마찰 소산 에너지 (N·mm)"] = hist["energy.friction"][-1]
+    msgs.append("총 에너지 = 변형 + 소성 소산 + 감쇠 소산 + 운동 + 마찰 소산 + 접촉 장벽 에너지. 외부 일(강체 이동·지정 변위·하중이 한 일)과 비교하면 해석의 에너지 균형을 확인할 수 있습니다")
     for bid in bc_dofs:
         res.summary[f"반력 {bid} (N)"] = [round(hist[f"reaction.{bid}.{nm}"][-1], 4) for nm in "xyz"]
     if ipc is not None:

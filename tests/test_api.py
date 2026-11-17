@@ -19,7 +19,7 @@ def post_ops(ops):
 
 def test_examples_listed():
     names = [e["name"] for e in c.get("/api/examples").json()]
-    assert names == ["cantilever_beam", "shell_panel", "cylinder_shell", "miura", "panel_chain", "contact_sphere", "contact_blocks", "tube_crush", "cantilever_solid", "cylinder_solid"]
+    assert names == ["cantilever_beam", "shell_panel", "cylinder_shell", "miura", "panel_chain", "contact_sphere", "contact_blocks", "tube_crush", "tube_platen", "cantilever_solid", "cylinder_solid"]
 
 
 @ccx
