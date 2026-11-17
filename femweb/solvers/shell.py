@@ -467,7 +467,7 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
         if extra is not None and hasattr(extra, "set_factor"):
             extra.set_factor(amp(lt))
         if extra is not None and hasattr(extra, "fraction"):
-            a = extra.fraction(x, xt)
+            a = extra.fraction(x, x)
             if a < 1.0:
                 lt = lam + a * (lt - lam)
                 if len(pres_dofs):
@@ -488,6 +488,13 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
                 a = extra.limit(x, np.arange(ndof), du) if extra is not None and hasattr(extra, "limit") else 1.0
                 if a >= 1.0:
                     xt = x + du
+                elif a > 1e-6:
+                    lt = lam + a * (lt - lam)
+                    xt = x + a * du
+                    if len(pres_dofs):
+                        xt[pres_dofs] = x0[pres_dofs] + amp(lt) * np.asarray(pres_vals)
+                    if hasattr(extra, "set_factor"):
+                        extra.set_factor(amp(lt))
         except Exception:
             pass
         xs, info = newton(sh, xt, free, fext * amp(lt), extra=extra, tol=tol)
