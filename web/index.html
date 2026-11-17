@@ -67,6 +67,7 @@
         <label class="check"><input type="checkbox" id="showEdges" checked>요소 경계</label>
         <label class="check"><input type="checkbox" id="showResult" checked>결과</label>
         <label class="check" id="meshLinesWrap"><input type="checkbox" id="showMeshLines" checked>결과 메쉬선</label>
+        <label class="check" id="thickWrap" hidden><input type="checkbox" id="showThick" checked>쉘 두께</label>
       </div>
       <div id="resultbar" hidden>
         <button id="play">▶</button>
@@ -75,6 +76,9 @@
         <select id="field"></select>
         <label>변형 배율<input id="scale" type="number" step="any" value="1"></label>
         <button id="autoScale" class="ghost">자동</button>
+        <button id="savePng" class="ghost" title="지금 화면을 PNG 로 저장">PNG</button>
+        <button id="saveGif" class="ghost" title="모든 프레임을 GIF 로 저장">GIF</button>
+        <button id="saveVideo" class="ghost" title="모든 프레임을 영상으로 저장">영상</button>
       </div>
     </div>
     <div id="bottom">

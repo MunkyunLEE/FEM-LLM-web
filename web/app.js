@@ -49,9 +49,12 @@ camera.position.set(300, -400, 250);
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.12;
-scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.15));
-const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x2a3442, 1.25));
+const sun = new THREE.DirectionalLight(0xffffff, 1.9);
 scene.add(sun);
+const fill = new THREE.DirectionalLight(0xbcd4ff, 0.7);
+scene.add(fill);
+const surfaceMat = (extra) => new THREE.MeshStandardMaterial({ roughness: 0.62, metalness: 0.08, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, ...extra });
 const G = { model: new THREE.Group(), edges: new THREE.Group(), symbols: new THREE.Group(), result: new THREE.Group(), pick: new THREE.Group(), rigid: new THREE.Group() };
 Object.values(G).forEach((g) => scene.add(g));
 let diag = 100;
@@ -105,7 +108,13 @@ function drawGizmo() {
 
 function loop() {
   controls.update();
-  sun.position.copy(camera.position);
+  const cr = new THREE.Vector3().crossVectors(camera.getWorldDirection(new THREE.Vector3()), camera.up).normalize();
+  sun.position.copy(camera.position).addScaledVector(cr, -0.45 * camera.position.distanceTo(controls.target)).addScaledVector(camera.up, 0.5 * camera.position.distanceTo(controls.target));
+  sun.target.position.copy(controls.target);
+  sun.target.updateMatrixWorld();
+  fill.position.copy(camera.position).addScaledVector(cr, 0.9 * camera.position.distanceTo(controls.target));
+  fill.target.position.copy(controls.target);
+  fill.target.updateMatrixWorld();
   renderer.render(scene, camera);
   drawGizmo();
   requestAnimationFrame(loop);
@@ -147,7 +156,7 @@ function buildModel() {
     const flat = g.toNonIndexed();
     flat.computeVertexNormals();
     g.dispose();
-    const m = new THREE.MeshLambertMaterial({ color: 0x9fb3c8, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+    const m = surfaceMat({ color: 0x9fb3c8 });
     G.model.add(new THREE.Mesh(flat, m));
   }
   const seen = new Set();
@@ -339,12 +348,44 @@ async function loadResult() {
   const n = R.mesh.nodes.length;
   const pos = new Float32Array(n * 3);
   const col = new Float32Array(n * 3);
+  const thick = R.mesh.thick && R.mesh.tris.length ? R.mesh.thick : null;
+  R.thick = thick;
+  R.mid = null;
+  R.pos2 = null;
   if (R.mesh.tris.length) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     g.setIndex(R.mesh.tris.flat());
-    G.result.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 })));
+    const thin = new THREE.Mesh(g, surfaceMat({ vertexColors: true }));
+    thin.userData.thin = true;
+    G.result.add(thin);
+    if (thick) {
+      R.mid = g;
+      R.pos2 = new Float32Array(n * 6);
+      R.col2 = new Float32Array(n * 6);
+      const idx = [];
+      const cnt = new Map();
+      for (const t of R.mesh.tris) {
+        idx.push(t[0], t[1], t[2], t[0] + n, t[2] + n, t[1] + n);
+        for (let k = 0; k < 3; k++) {
+          const a = t[k];
+          const b = t[(k + 1) % 3];
+          const key = a < b ? a * 1e7 + b : b * 1e7 + a;
+          const c = cnt.get(key);
+          if (c) c.n += 1;
+          else cnt.set(key, { n: 1, a, b });
+        }
+      }
+      for (const c of cnt.values()) if (c.n === 1) idx.push(c.a, c.a + n, c.b, c.b, c.a + n, c.b + n);
+      const g2 = new THREE.BufferGeometry();
+      g2.setAttribute('position', new THREE.BufferAttribute(R.pos2, 3));
+      g2.setAttribute('color', new THREE.BufferAttribute(R.col2, 3));
+      g2.setIndex(idx);
+      const solid = new THREE.Mesh(g2, surfaceMat({ vertexColors: true }));
+      solid.userData.thick = true;
+      G.result.add(solid);
+    }
   }
   if (R.mesh.lines.length) {
     const g = new THREE.BufferGeometry();
@@ -360,7 +401,19 @@ async function loadResult() {
     g.setIndex(R.mesh.fedges.flat());
     const ls = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x0b0f14, transparent: true, opacity: 0.55 }));
     ls.userData.meshLines = true;
+    ls.userData.thin = true;
     G.result.add(ls);
+    if (thick) {
+      const g2 = new THREE.BufferGeometry();
+      g2.setAttribute('position', new THREE.BufferAttribute(R.pos2, 3));
+      const e2 = [];
+      for (const e of R.mesh.fedges) e2.push(e[0], e[1], e[0] + n, e[1] + n);
+      g2.setIndex(e2);
+      const l2 = new THREE.LineSegments(g2, new THREE.LineBasicMaterial({ color: 0x0b0f14, transparent: true, opacity: 0.5 }));
+      l2.userData.meshLines = true;
+      l2.userData.thick = true;
+      G.result.add(l2);
+    }
   }
   R.pos = pos;
   R.col = col;
@@ -410,6 +463,20 @@ async function showFrame() {
     R.pos[3 * i + 2] = p[2] + R.scale * u[2];
     ramp((f.values[i] - lo) / span, R.col, 3 * i);
   }
+  if (R.mid && R.pos2) {
+    R.mid.computeVertexNormals();
+    const nr = R.mid.attributes.normal.array;
+    for (let i = 0; i < n; i++) {
+      const h = 0.5 * R.thick[i];
+      for (let k = 0; k < 3; k++) {
+        const c = 3 * i + k;
+        R.pos2[c] = R.pos[c] + h * nr[c];
+        R.pos2[3 * n + c] = R.pos[c] - h * nr[c];
+        R.col2[c] = R.col[c];
+        R.col2[3 * n + c] = R.col[c];
+      }
+    }
+  }
   for (const o of G.result.children) {
     o.geometry.attributes.position.needsUpdate = true;
     if (o.geometry.attributes.color) o.geometry.attributes.color.needsUpdate = true;
@@ -423,6 +490,89 @@ async function showFrame() {
   const ticks = $('legendTicks');
   ticks.innerHTML = '';
   for (let k = 4; k >= 0; k--) ticks.append(el('span', '', fmt(lo + (span * k) / 4)));
+}
+
+function snapshot(maxW) {
+  const sv = G.symbols.visible;
+  G.symbols.visible = false;
+  renderer.render(scene, camera);
+  G.symbols.visible = sv;
+  const k = Math.min(1, maxW / canvas.width);
+  const c = document.createElement('canvas');
+  c.width = Math.round(canvas.width * k);
+  c.height = Math.round(canvas.height * k);
+  const x = c.getContext('2d');
+  x.fillStyle = getComputedStyle(document.body).backgroundColor || '#0f141b';
+  x.fillRect(0, 0, c.width, c.height);
+  x.drawImage(canvas, 0, 0, c.width, c.height);
+  return c.toDataURL('image/png');
+}
+
+function download(url, name) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+}
+
+async function saveGif() {
+  if (!R.mesh) return;
+  stopPlay();
+  const keep = R.index;
+  const total = st.result.frames.length;
+  const step = Math.max(1, Math.ceil(total / 80));
+  const frames = [];
+  try {
+    for (let i = 0; i < total; i += step) {
+      R.index = i;
+      $('frame').value = i;
+      await showFrame();
+      frames.push(snapshot(900));
+    }
+    if ((total - 1) % step) {
+      R.index = total - 1;
+      await showFrame();
+      frames.push(snapshot(900));
+    }
+    const r = await fetch('/api/export/gif', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ frames, fps: 8 }) });
+    if (!r.ok) throw new Error(((await r.json().catch(() => null)) || {}).detail || 'GIF 저장 실패');
+    download(URL.createObjectURL(await r.blob()), 'femweb.gif');
+  } catch (e) {
+    note(e.message, true);
+  }
+  R.index = keep;
+  $('frame').value = keep;
+  showFrame();
+}
+
+async function saveVideo() {
+  if (!R.mesh) return;
+  if (!window.MediaRecorder || !canvas.captureStream) return note('이 브라우저는 영상 저장을 지원하지 않습니다. GIF 를 쓰세요', true);
+  stopPlay();
+  const mime = ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m));
+  if (!mime) return note('지원되는 영상 형식이 없습니다. GIF 를 쓰세요', true);
+  const keep = R.index;
+  const rec = new MediaRecorder(canvas.captureStream(30), { mimeType: mime, videoBitsPerSecond: 8e6 });
+  const chunks = [];
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  const done = new Promise((res) => (rec.onstop = res));
+  const sv = G.symbols.visible;
+  G.symbols.visible = false;
+  rec.start();
+  for (let i = 0; i < st.result.frames.length; i++) {
+    R.index = i;
+    $('frame').value = i;
+    await showFrame();
+    await new Promise((res) => setTimeout(res, 120));
+  }
+  await new Promise((res) => setTimeout(res, 500));
+  rec.stop();
+  await done;
+  G.symbols.visible = sv;
+  download(URL.createObjectURL(new Blob(chunks, { type: mime })), mime.startsWith('video/mp4') ? 'femweb.mp4' : 'femweb.webm');
+  R.index = keep;
+  $('frame').value = keep;
+  showFrame();
 }
 
 function stopPlay() {
@@ -442,9 +592,14 @@ function applyVisibility() {
   $('legend').hidden = !res;
   $('resultbar').hidden = !R.mesh;
   const ml = $('showMeshLines').checked;
+  const tk = !!R.thick && $('showThick').checked;
   G.result.children.forEach((c) => {
-    if (c.userData.meshLines) c.visible = ml;
+    c.visible = true;
+    if (c.userData.thick) c.visible = tk;
+    if (c.userData.thin) c.visible = !tk;
+    if (c.userData.meshLines) c.visible = c.visible && ml;
   });
+  $('thickWrap').hidden = !R.thick;
   $('meshLinesWrap').hidden = !R.mesh;
 }
 
@@ -1092,7 +1247,7 @@ function bind() {
   };
   $('cancelSolve').onclick = () => api('/api/cancel/solve', { method: 'POST' }).catch(() => {});
   $('fit').onclick = fit;
-  for (const id of ['showSymbols', 'showEdges', 'showResult', 'showMeshLines']) $(id).onchange = applyVisibility;
+  for (const id of ['showSymbols', 'showEdges', 'showResult', 'showMeshLines', 'showThick']) $(id).onchange = applyVisibility;
   $('frame').oninput = (e) => {
     R.index = +e.target.value;
     showFrame();
@@ -1118,6 +1273,9 @@ function bind() {
       showFrame();
     }, 220);
   };
+  $('savePng').onclick = () => download(snapshot(1600), 'femweb.png');
+  $('saveGif').onclick = saveGif;
+  $('saveVideo').onclick = saveVideo;
   $('llmTest').onclick = llmTest;
   $('chatForm').onsubmit = (e) => {
     e.preventDefault();

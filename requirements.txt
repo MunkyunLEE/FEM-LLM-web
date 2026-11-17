@@ -6,3 +6,4 @@ numpy>=1.26
 scipy>=1.11
 gmsh>=4.12
 meshio>=5.3
+pillow

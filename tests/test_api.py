@@ -160,3 +160,20 @@ def test_result_mesh_has_face_edges_without_quad_diagonals():
     m = c.get("/api/result/mesh").json()
     assert len(m["fedges"]) > 0 and len(m["fedges"]) < len(m["tris"]) * 3
     assert len(m["fedges"]) == 480
+
+
+def test_export_gif():
+    import base64
+    import io
+
+    PIL = pytest.importorskip("PIL")
+    from PIL import Image
+
+    frames = []
+    for col in ((255, 0, 0), (0, 0, 255)):
+        b = io.BytesIO()
+        Image.new("RGB", (8, 6), col).save(b, format="PNG")
+        frames.append("data:image/png;base64," + base64.b64encode(b.getvalue()).decode())
+    r = c.post("/api/export/gif", json={"frames": frames, "fps": 5})
+    assert r.status_code == 200 and r.content[:3] == b"GIF"
+    assert Image.open(io.BytesIO(r.content)).n_frames == 2

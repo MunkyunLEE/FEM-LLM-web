@@ -451,6 +451,36 @@ def result_frame(i: int = -1, field: str = "U"):
         return r.frame(i, field)
 
 
+class GifReq(BaseModel):
+    frames: list[str]
+    fps: float = 8.0
+
+
+@app.post("/api/export/gif")
+def export_gif(req: GifReq):
+    import base64
+    import io
+
+    from fastapi import Response
+
+    try:
+        from PIL import Image
+    except Exception:
+        fail("GIF 저장에는 Pillow 가 필요합니다 (pip install pillow). 영상 저장은 그대로 쓸 수 있습니다", 422)
+    if not req.frames:
+        fail("프레임이 없습니다", 422)
+    ims = []
+    for d in req.frames[:400]:
+        raw = base64.b64decode(d.split(",", 1)[-1])
+        ims.append(Image.open(io.BytesIO(raw)).convert("RGB"))
+    pal = ims[len(ims) // 2].quantize(colors=255, method=Image.Quantize.MEDIANCUT)
+    out = [im.quantize(palette=pal, dither=Image.Dither.FLOYDSTEINBERG) for im in ims]
+    buf = io.BytesIO()
+    dur = int(1000 / max(1.0, min(30.0, req.fps)))
+    out[0].save(buf, format="GIF", save_all=True, append_images=out[1:], duration=[dur] * (len(out) - 1) + [dur * 6], loop=0, optimize=False)
+    return Response(content=buf.getvalue(), media_type="image/gif")
+
+
 @app.get("/api/plots")
 def get_plots():
     with lock:

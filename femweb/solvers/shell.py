@@ -1102,6 +1102,17 @@ def solve(model, spec, progress=None):
     res = Result("shell", "static")
     res.nodes = X.copy()
     res.tris = T
+    fe = set()
+    for f in model.shells:
+        f = [int(i) for i in f]
+        for a, b in zip(f, f[1:] + f[:1]):
+            fe.add((min(a, b), max(a, b)))
+    res.fedges = np.array(sorted(fe), dtype=int).reshape(-1, 2)
+    tn = np.zeros(len(X))
+    cn = np.zeros(len(X))
+    np.add.at(tn, T.ravel(), np.repeat(tt, 3))
+    np.add.at(cn, T.ravel(), 1.0)
+    res.thick = tn / np.maximum(cn, 1.0)
     names = ("time", "load_factor", "reaction.x", "reaction.y", "reaction.z", "u.max", "vonMises.max", "energy.strain", "energy.plastic", "energy.damping", "energy.kinetic", "peeq.max", "contact.count", "contact.gap")
     hist = {k: [] for k in names}
     cforce, cdisp, rig = [], [], {i: [] for i in rigid_ids}
