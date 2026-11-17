@@ -187,6 +187,7 @@ def _return_map(e, ep, al, E, nu, hard):
 
 class Shell:
     def __init__(self, X, tris, E, nu, t, clamped=None, plastic=None):
+        torch.set_num_threads(1)
         X = np.asarray(X, float)
         tris = np.asarray(tris, int)
         self.n = len(X)
