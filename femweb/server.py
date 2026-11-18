@@ -372,6 +372,10 @@ def _worker(conn, m, base, spec):
         except Exception:
             pass
 
+    from . import progress as _pg
+
+    _pg.set_hook(lambda txt: conn.send(("stage", txt)))
+
     try:
         conn.send(("ok", _solve_with(m, base, spec, prog)))
     except BaseException as e:
@@ -401,6 +405,7 @@ def run_solver():
     JOB["cancelled"] = False
     JOB["t0"] = time.time()
     JOB["prog"] = None
+    JOB["stage"] = None
     sp = S["spec"]
     mv = [abs(float(v)) for c in sp.get("contacts") or [] if c.get("type") == "rigid" for v in c.get("motion", [])]
     JOB["info"] = {"solver": sp["solver"], "increments": int(sp["step"].get("increments") or 0), "travel": max(mv) if mv else (float(sp["step"].get("control_disp") or 0.0) if sp["step"].get("control") == "displacement" else 0.0)}
@@ -416,6 +421,9 @@ def run_solver():
                     msg = None
                 if msg is not None and msg[0] == "prog":
                     JOB["prog"] = msg[1]
+                    continue
+                if msg is not None and msg[0] == "stage":
+                    JOB["stage"] = msg[1]
                     continue
                 break
             if not proc.is_alive():
@@ -462,7 +470,7 @@ def progress():
     p = JOB["prog"] or {}
     info = JOB["info"] or {}
     lam = float(p.get("lam", 0.0))
-    out = {"running": True, "elapsed": round(el, 1), "solver": info.get("solver"), "lam": lam if p else None, "inc": p.get("inc"), "increments": info.get("increments")}
+    out = {"running": True, "elapsed": round(el, 1), "solver": info.get("solver"), "lam": lam if p else None, "inc": p.get("inc"), "increments": info.get("increments"), "stage": JOB.get("stage")}
     if p and lam > 0.01:
         rate = lam / max(p["t"], 1e-9)
         out["eta"] = round(max(0.0, (1.0 - lam) / rate - (el - p["t"])), 0)

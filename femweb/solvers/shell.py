@@ -7,6 +7,8 @@ import scipy.sparse.linalg as spla
 import torch
 from torch.func import grad, hessian, vmap
 
+from .. import progress as _pg
+
 torch.set_default_dtype(torch.float64)
 
 
@@ -444,6 +446,7 @@ def newton(sh, x, free, fext, extra=None, tol=1e-6, itmax=40):
         ref = max(fscale, np.linalg.norm(g[con]), 1e-9)
         info["iters"] = it
         info["res"] = nr / ref
+        _pg.detail(f"뉴턴 반복 {it + 1}, 잔차 {nr / ref:.1e}")
         if nr <= max(tol * ref, sh.floor):
             info["converged"] = True
             break
@@ -593,6 +596,7 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
                         extra.set_factor(amp(lt))
         except Exception:
             pass
+        _pg.context(f"증분 {sum(1 for hh in hist if not hh.get('failed')) + 1} 풀이 중 · 진행 {100 * lam:.1f}% → {100 * lt:.1f}%" + (f" · 증분 축소 {cuts}회" if cuts else ""))
         xs, info = newton(sh, xt, free, fext * amp(lt), extra=extra, tol=tol)
         if not info["converged"]:
             cuts += 1
@@ -1253,6 +1257,7 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
         X = np.asarray(ck["X"], float)
         imp = 0.0
     if imp > 0:
+        _pg.context("초기 결함용 선형 좌굴 모드 계산 중")
         sh0 = make(X)
         f0 = np.zeros(sh0.ndof)
         f0[: sh0.nx] = lumped(model, orig)[0].ravel()
@@ -1340,6 +1345,7 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
         if len({float(c.get("friction") or 0.0) for c in cs}) > 1:
             msgs.append(f"접촉마다 마찰계수가 달라 가장 큰 값 {mu:g} 을 모두에 적용했습니다")
         only_rigid = not selfc and groups is None
+        _pg.context("접촉 준비 중")
         ipc = IPCContact(sh, mu=mu, dhat=dhat, groups=groups, self_contact=not only_rigid, obstacles=obstacles)
         parts.append(ipc)
         msgs.append(f"접촉: IPC 장벽법(ipctk), 최소 간격 = 두께 {tmean:g} mm, 장벽 범위 {dhat:g} mm" + (", 자기 접촉 포함" if selfc else "") + (f", 마찰 {mu:g}" if mu > 0 else ""))
@@ -1353,6 +1359,7 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
         if rho <= 0:
             raise ValueError("감쇠를 쓰려면 재료 밀도가 필요합니다")
         allc = np.concatenate([fixed, pres]).astype(int)
+        _pg.context("감쇠용 1·2차 고유진동수 계산 중")
         w = frequencies(sh, rho, allc, k=2)
         if kind == "direct":
             al, be = float(dspec.get("alpha") or 0.0), float(dspec.get("beta") or 0.0)

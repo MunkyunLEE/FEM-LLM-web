@@ -1253,7 +1253,7 @@ function bind() {
         if (!p.running) return;
         if (p.lam == null) {
           b.textContent = `해석 중… ${tm(p.elapsed)}`;
-          note(`해석 중 · ${tm(p.elapsed)} 경과`);
+          note(`${p.stage || '해석 준비 중'} · ${tm(p.elapsed)} 경과`);
           return;
         }
         const pct = (100 * p.lam).toFixed(1);
@@ -1262,7 +1262,7 @@ function bind() {
         if (p.disp != null) parts.push(`변위 ${p.disp} mm`);
         parts.push(`${tm(p.elapsed)} 경과`);
         if (p.eta != null) parts.push(`남은 약 ${tm(p.eta)}`);
-        note(parts.join(' · '));
+        note(parts.join(' · ') + (p.stage ? `\n${p.stage}` : ''));
       } catch (e) {}
     }, 1000);
     try {

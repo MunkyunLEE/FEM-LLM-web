@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import numpy as np
 from ..loads import assemble, bc_table
 from ..result import Result, von_mises
@@ -429,12 +430,24 @@ def run_ccx(inp, threads=None):
     if not exe:
         raise RuntimeError("CalculiX(ccx) 실행 파일을 찾을 수 없습니다. 설치 후 PATH에 두거나 FEMWEB_CCX 환경변수로 경로를 지정하세요")
     d = tempfile.mkdtemp(prefix="femweb_ccx_")
-    with open(os.path.join(d, "job.inp"), "w") as f:
+    with open(os.path.join(d, "job.inp"), "w", encoding="utf-8") as f:
         f.write(inp)
     env = dict(os.environ)
     env["OMP_NUM_THREADS"] = str(threads or os.cpu_count() or 1)
-    p = subprocess.run([exe, "job"], cwd=d, env=env, capture_output=True, text=True, timeout=3600)
-    out = p.stdout + p.stderr
+    from .. import progress as _pg
+
+    _pg.context("CalculiX 실행 중")
+    logf = open(os.path.join(d, "job.log"), "w+", encoding="utf-8", errors="replace")
+    p = subprocess.Popen([exe, "job"], cwd=d, env=env, stdout=logf, stderr=subprocess.STDOUT, text=True)
+    sta = os.path.join(d, "job.sta")
+    while p.poll() is None:
+        time.sleep(1.0)
+        row = _sta_last(sta)
+        if row:
+            _pg.stage(f"CalculiX 스텝 {row[0]} 증분 {row[1]} (시도 {row[2]}, 반복 {row[3]}), 스텝 시간 {row[5]:.4g}", force=True)
+    logf.seek(0)
+    out = logf.read()
+    logf.close()
     frd = os.path.join(d, "job.frd")
     dat = os.path.join(d, "job.dat")
     err = [l.strip() for l in out.splitlines() if "*ERROR" in l]
@@ -447,6 +460,22 @@ def run_ccx(inp, threads=None):
     dat_text = open(dat).read() if os.path.exists(dat) else ""
     shutil.rmtree(d, ignore_errors=True)
     return frd_text, dat_text, out
+
+
+def _sta_last(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for ln in reversed(lines):
+        t = ln.split()
+        if len(t) >= 7 and t[0].isdigit() and t[1].isdigit():
+            try:
+                return int(t[0]), int(t[1]), t[2], int(t[3]), float(t[4]), float(t[5])
+            except ValueError:
+                continue
+    return None
 
 
 def parse_frd(text):
