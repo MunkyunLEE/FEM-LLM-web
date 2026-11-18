@@ -258,7 +258,9 @@ def chat(body: Chat):
                 rule_ok = False
                 rreply += f" (적용 검사 실패: {e})"
         direct = rule_ok or (info["ask"] and not info["unknown"]) or info["answered"]
-        use_llm = mode in ("auto", "llm") or (mode == "rule_first" and not direct)
+        use_llm = (mode in ("auto", "llm") or (mode == "rule_first" and not direct)) and llm.configured(cfg)
+        if mode == "llm" and not llm.configured(cfg):
+            fail("LLM 이 설정되지 않았습니다. LLM 칸에 엔드포인트와 모델 이름을 넣어 주세요")
         ops, reply = rops, rreply
         if use_llm:
             try:

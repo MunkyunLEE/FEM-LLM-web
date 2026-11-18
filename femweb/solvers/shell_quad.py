@@ -25,6 +25,17 @@ def _rot(th, v):
     return v + a * c1 + b * torch.linalg.cross(th, c1, dim=-1)
 
 
+def device():
+    v = os.environ.get("FEMWEB_DEVICE", "cpu").lower()
+    if v == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    return v
+
+
 class QuadShell:
     def __init__(self, X, quads, E, nu, t, rot_fixed=None, plastic=None, kink_deg=20.0):
         set_threads()
@@ -176,8 +187,8 @@ class QuadShell:
     def _hshadow(self):
         if getattr(self, "_is_shadow", False):
             return None
-        dev = os.environ.get("FEMWEB_DEVICE", "cpu").lower()
-        prec = os.environ.get("FEMWEB_HESS", "float64" if dev == "cpu" else "float32").lower()
+        dev = device()
+        prec = os.environ.get("FEMWEB_HESS", "float32" if dev == "mps" else "float64").lower()
         if dev == "cpu" and prec == "float64":
             return None
         if getattr(self, "_hs", None) is None:

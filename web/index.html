@@ -90,9 +90,9 @@
     <div class="topbar"><a id="theoryBtn" class="btn ghost" href="/theory.html" target="_blank" rel="noopener">Theory · 원리와 설계</a></div>
     <section class="llm">
       <h2>LLM <small id="llmStatus"></small></h2>
-      <div class="row two"><label>방식<select id="llmMode"><option value="rule_first">규칙 우선 (모르면 LLM)</option><option value="auto">LLM 우선 (실패 시 규칙)</option><option value="llm">LLM만</option><option value="rule">규칙 기반만</option></select></label><label>모델<input id="llmModel" type="text"></label></div>
-      <div class="row"><label>엔드포인트 (OpenAI 호환)<input id="llmUrl" type="text"></label></div>
-      <div class="row two"><label>API 키 (선택)<input id="llmKey" type="password" placeholder="로컬은 비워 둠"></label><button id="llmSave" class="ghost">적용 · 확인</button></div>
+      <div class="row two"><label>방식<select id="llmMode"><option value="rule_first">규칙 우선 (모르면 LLM)</option><option value="auto">LLM 우선 (실패 시 규칙)</option><option value="llm">LLM만</option><option value="rule">규칙 기반만</option></select></label><label>모델<input id="llmModel" type="text" placeholder="예: gpt-4o-mini"></label></div>
+      <div class="row"><label>엔드포인트 (OpenAI 호환)<input id="llmUrl" type="text" placeholder="비워 두면 규칙 기반만 사용 · 예: https://사내게이트웨이/v1"></label></div>
+      <div class="row two"><label>API 키 (선택)<input id="llmKey" type="password" placeholder="필요한 경우만"></label><button id="llmSave" class="ghost">적용 · 확인</button></div>
       <div class="row"><button id="llmTest" class="ghost" type="button">실제 응답 테스트</button></div>
       <div id="llmInfo" class="info"></div>
     </section>

@@ -2,9 +2,12 @@ import http.client
 import json
 import os
 import re
+import base64
 import socket
+import ssl
 import threading
 import urllib.parse
+import urllib.request
 
 
 class Cancelled(Exception):
@@ -31,16 +34,49 @@ def cancel():
     return c is not None
 
 
-def _post(url, body, headers, timeout):
+def ssl_context():
+    ca = os.environ.get("FEMWEB_CA_BUNDLE") or os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("SSL_CERT_FILE") or None
+    return ssl.create_default_context(cafile=ca)
+
+
+def _proxy(u):
+    if not u.hostname or u.hostname in ("localhost", "127.0.0.1", "::1") or urllib.request.proxy_bypass(u.hostname):
+        return None
+    px = urllib.request.getproxies().get(u.scheme)
+    if not px:
+        return None
+    return urllib.parse.urlsplit(px if "://" in px else "http://" + px)
+
+
+def _connect(url, timeout):
     u = urllib.parse.urlsplit(url)
-    cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
-    c = cls(u.hostname, u.port, timeout=timeout)
+    https = u.scheme == "https"
+    port = u.port or (443 if https else 80)
+    path = u.path + ("?" + u.query if u.query else "")
+    p = _proxy(u)
+    if p is None:
+        if https:
+            return http.client.HTTPSConnection(u.hostname, port, timeout=timeout, context=ssl_context()), path, {}
+        return http.client.HTTPConnection(u.hostname, port, timeout=timeout), path, {}
+    auth = {}
+    if p.username:
+        tok = base64.b64encode(f"{urllib.parse.unquote(p.username)}:{urllib.parse.unquote(p.password or '')}".encode()).decode()
+        auth = {"Proxy-Authorization": "Basic " + tok}
+    if https:
+        c = http.client.HTTPSConnection(p.hostname, p.port or 8080, timeout=timeout, context=ssl_context())
+        c.set_tunnel(u.hostname, port, headers=auth)
+        return c, path, {}
+    return http.client.HTTPConnection(p.hostname, p.port or 8080, timeout=timeout), url, auth
+
+
+def _post(url, body, headers, timeout):
+    c, path, extra = _connect(url, timeout)
+    headers = {**headers, **extra}
     with _alock:
         if ACTIVE["cancelled"]:
             raise Cancelled()
         ACTIVE["conn"] = c
     try:
-        path = u.path + ("?" + u.query if u.query else "")
         c.request("POST", path, body=json.dumps(body).encode("utf-8"), headers=headers)
         r = c.getresponse()
         data = r.read()
@@ -106,11 +142,15 @@ Example: "시간-총에너지 그래프 그려줘" ->
 """
 
 DEFAULTS = {
-    "url": os.environ.get("FEMWEB_LLM_URL", "http://localhost:11434/v1"),
-    "model": os.environ.get("FEMWEB_LLM_MODEL", "qwen3:8b"),
+    "url": os.environ.get("FEMWEB_LLM_URL", ""),
+    "model": os.environ.get("FEMWEB_LLM_MODEL", ""),
     "key": os.environ.get("FEMWEB_LLM_KEY", ""),
-    "mode": os.environ.get("FEMWEB_LLM_MODE", "rule_first"),
+    "mode": os.environ.get("FEMWEB_LLM_MODE", "rule_first" if os.environ.get("FEMWEB_LLM_URL") else "rule"),
 }
+
+
+def configured(cfg):
+    return bool(str(cfg.get("url") or "").strip()) and bool(str(cfg.get("model") or "").strip())
 
 
 def context(model, spec, result_meta=None):
@@ -139,7 +179,7 @@ def ask_llm(cfg, text, ctx, history=None, error=None):
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": ctx}]
     for h in (history or [])[-6:]:
         msgs.append({"role": h["role"], "content": h["content"]})
-    nothink = "qwen3" in str(cfg.get("model", "")).lower() and os.environ.get("FEMWEB_LLM_THINK", "0") != "1"
+    nothink = os.environ.get("FEMWEB_LLM_NOTHINK", "0") == "1"
     msgs.append({"role": "user", "content": text + (" /no_think" if nothink else "")})
     if error:
         msgs.append({"role": "user", "content": f"The previous ops failed validation: {error}\nReturn corrected JSON."})
@@ -158,6 +198,8 @@ def ask_llm(cfg, text, ctx, history=None, error=None):
 def provider(url):
     u = urllib.parse.urlsplit(url or "")
     h = (u.hostname or "").lower()
+    if not h:
+        return "미설정"
     if h in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
         if u.port == 11434:
             return "Ollama (이 컴퓨터)"
@@ -184,9 +226,11 @@ def llm_status(cfg):
 
     u = urllib.parse.urlsplit(cfg["url"])
     base = {"provider": provider(cfg["url"]), "host": (u.hostname or "") + (f":{u.port}" if u.port else ""), "key_set": bool(cfg.get("key"))}
+    if not configured(cfg):
+        return {**base, "ok": False, "error": "LLM 이 설정되지 않았습니다 (엔드포인트와 모델 이름을 넣으면 연결합니다)", "models": []}
     try:
         t = time.time()
-        r = httpx.get(cfg["url"].rstrip("/") + "/models", timeout=4, headers={"Authorization": "Bearer " + cfg["key"]} if cfg.get("key") else {})
+        r = httpx.get(cfg["url"].rstrip("/") + "/models", timeout=4, verify=ssl_context(), headers={"Authorization": "Bearer " + cfg["key"]} if cfg.get("key") else {})
         ms = round((time.time() - t) * 1000)
         r.raise_for_status()
         names = [_norm(m.get("id")) for m in r.json().get("data", [])]
@@ -198,7 +242,9 @@ def llm_status(cfg):
 def test_llm(cfg):
     import time
 
-    nothink = "qwen3" in str(cfg.get("model", "")).lower() and os.environ.get("FEMWEB_LLM_THINK", "0") != "1"
+    if not configured(cfg):
+        return {"ok": False, "error": "LLM 이 설정되지 않았습니다"}
+    nothink = os.environ.get("FEMWEB_LLM_NOTHINK", "0") == "1"
     msgs = [
         {"role": "system", "content": 'Reply with ONE JSON object only: {"ops": [], "reply": "<short Korean greeting>"}'},
         {"role": "user", "content": "안녕" + (" /no_think" if nothink else "")},

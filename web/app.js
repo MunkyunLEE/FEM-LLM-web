@@ -1059,7 +1059,10 @@ async function llmRefresh(save) {
   $('llmMode').value = r.llm.mode;
   const s = $('llmStatus');
   renderLlmInfo(r);
-  if (r.llm.mode === 'rule') {
+  if (!r.llm.url || !r.llm.model) {
+    s.textContent = '규칙 기반 사용 · LLM 미설정';
+    s.className = '';
+  } else if (r.llm.mode === 'rule') {
     s.textContent = '규칙 기반 사용';
     s.className = '';
   } else if (r.llm.mode === 'rule_first') {

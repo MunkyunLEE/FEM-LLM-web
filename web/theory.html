@@ -112,7 +112,7 @@ svg{max-width:100%;height:auto}
 <tr><td>2. 조건 입력</td><td>그룹·평면·상자·가장 가까운 점 선택, 구속·하중·강제변위, 화면 기호 표시</td><td><span class="tag done">완료</span></td></tr>
 <tr><td>3. 솔버</td><td>CalculiX(정적·비선형·좌굴·진동), 바-힌지(하중·변위 제어, 호장법), TensorMesh(선형·비선형)</td><td><span class="tag done">완료</span></td></tr>
 <tr><td>4. 결과</td><td>색 지도, 변형 배율, 프레임 재생, 절점 클릭, 문장으로 그래프 요청</td><td><span class="tag done">완료</span></td></tr>
-<tr><td>5. LLM</td><td>OpenAI 호환 연결(Ollama·Gemini 등), 실패 시 규칙 기반 대체, 강제 중단, 연결 확인</td><td><span class="tag done">완료</span></td></tr>
+<tr><td>5. LLM</td><td>OpenAI 호환 연결(사내 게이트웨이·Gemini 등, 기본은 LLM 없음), 실패 시 규칙 기반 대체, 강제 중단, 연결 확인</td><td><span class="tag done">완료</span></td></tr>
 <tr><td>5-2. 규칙 우선 · 힌지</td><td>규칙 해석기 확장과 규칙 우선 모드, 쉘 공유 엣지 자동 힌지, 핀 조인트, CalculiX 회전 스프링 힌지</td><td><span class="tag done">완료</span></td></tr>
 <tr><td>6. 보정</td><td>강성이 있는 미우라에서 CalculiX와 바-힌지의 남은 차이(약 0.8배) 원인 확인, Abaqus 커넥터 비교</td><td><span class="tag todo">남음</span></td></tr>
 <tr><td>7. 확장</td><td>TensorMesh 좌굴·소성·열·유체, Windows/Linux 솔버 패키지, 접촉, STEP 입력</td><td><span class="tag todo">남음</span></td></tr>
@@ -349,7 +349,7 @@ svg{max-width:100%;height:auto}
 <li><b>규칙 우선</b>: 기본 방식입니다. 문장을 먼저 정해둔 규칙으로 읽고, 남는 말 없이 전부 이해했을 때만 바로 적용합니다. 모르는 말이 남은 문장만 LLM에게 보냅니다. 그래서 흔한 지시는 기다림 없이 처리됩니다. 방향이나 위치가 빠졌으면 LLM을 부르지 않고 바로 되묻습니다.</li>
 <li><b>눈으로 확인</b>: 적용된 조건은 목록과 3D 기호(파란 고정 기호, 빨간 하중 화살표)로 바로 보여서, 이상하면 해석 전에 알아챌 수 있습니다.</li>
 <li><b>강제 중단</b>: LLM 응답이 너무 늦으면 "LLM 중단" 버튼으로 끊을 수 있고, 해석이 길어지면 "해석 강제 중단"으로 멈출 수 있습니다.</li>
-<li><b>생각 끄기</b>: Qwen3 모델은 답하기 전에 긴 "생각"을 하는데, 이 단계를 기본으로 꺼서 응답을 빠르게 했습니다.</li>
+<li><b>생각 끄기</b>: Qwen3 계열처럼 답하기 전에 긴 "생각"을 하는 모델은 <code>FEMWEB_LLM_NOTHINK=1</code> 로 그 단계를 끌 수 있습니다.</li>
 </ul>
 <div class="card warn"><b class="t">그래도 사람이 확인해야 합니다</b>
 LLM이 의도와 다른 해석을 할 수 있습니다. 예를 들어 "아래쪽"을 z 최소로 볼지 y 최소로 볼지 모호하면 틀릴 수 있어서, 해석 전에 화면의 조건을 한 번 보시는 것이 안전합니다.</div>
@@ -358,16 +358,17 @@ LLM이 의도와 다른 해석을 할 수 있습니다. 예를 들어 "아래쪽
 <p>"OpenAI 호환"이라는 널리 쓰는 통신 규격을 사용합니다. 주소(엔드포인트), 모델 이름, 키 세 가지만 바꾸면 여러 서비스에 연결됩니다.</p>
 <table>
 <tr><th>서비스</th><th>엔드포인트</th><th>키</th></tr>
-<tr><td>Ollama (내 컴퓨터, 기본)</td><td><code>http://localhost:11434/v1</code></td><td>필요 없음</td></tr>
+<tr><td>사내 LLM 게이트웨이 (OpenAI 호환일 때)</td><td>게이트웨이의 <code>/v1</code> 주소</td><td>게이트웨이 규칙에 따름</td></tr>
 <tr><td>Google Gemini</td><td><code>https://generativelanguage.googleapis.com/v1beta/openai/</code></td><td>필요 (AI Studio에서 발급)</td></tr>
 <tr><td>OpenAI, 기타 호환 서비스</td><td>서비스의 <code>/v1</code> 주소</td><td>필요</td></tr>
 </table>
 <ul>
-<li><b>기본값</b>은 내 컴퓨터에서 돌아가는 Ollama의 <code>qwen3:8b</code> 입니다. 모델 요약과 지시문이 밖으로 나가지 않습니다.</li>
+<li><b>기본값</b>은 LLM 없음입니다. 엔드포인트를 비워 두면 규칙 기반 해석기만 쓰고, 어떤 정보도 밖으로 나가지 않습니다.</li>
+<li>회사망에서는 LLM 호출이 <code>HTTPS_PROXY</code>·<code>NO_PROXY</code> 설정을 따르고, 사내 인증서는 <code>FEMWEB_CA_BUNDLE</code> 로 지정합니다.</li>
 <li>외부 서비스(Gemini 등)를 쓰면 모델 요약과 지시문이 그 서비스로 전송됩니다. 사내 도면이라면 보안 정책을 확인해 주세요.</li>
 </ul>
 <div class="card ok"><b class="t">연결이 제대로 됐는지 확인하는 법</b>
-화면 오른쪽 위 LLM 설정에 <b>"연결 대상"</b>(예: Ollama (이 컴퓨터) 또는 Google Gemini API (클라우드))과 서버 응답 시간이 표시됩니다. <b>"실제 응답 테스트"</b> 버튼을 누르면 모델에게 짧은 인사를 실제로 시켜 보고, 응답한 모델 이름, 걸린 시간, 형식(JSON)이 맞는지를 보여 줍니다. 또 채팅 응답 위의 태그가 <b>"LLM · 모델이름"</b> 이면 그 모델이 처리한 것이고 <b>"규칙 기반"</b> 이면 LLM이 아닌 규칙으로 처리된 것입니다.</div>
+화면 오른쪽 위 LLM 설정에 <b>"연결 대상"</b>(예: 외부 서버 이름 또는 Google Gemini API (클라우드), 설정 전에는 "미설정")과 서버 응답 시간이 표시됩니다. <b>"실제 응답 테스트"</b> 버튼을 누르면 모델에게 짧은 인사를 실제로 시켜 보고, 응답한 모델 이름, 걸린 시간, 형식(JSON)이 맞는지를 보여 줍니다. 또 채팅 응답 위의 태그가 <b>"LLM · 모델이름"</b> 이면 그 모델이 처리한 것이고 <b>"규칙 기반"</b> 이면 LLM이 아닌 규칙으로 처리된 것입니다.</div>
 
 <h2 id="limits">9. 한계와 주의</h2>
 <ul>

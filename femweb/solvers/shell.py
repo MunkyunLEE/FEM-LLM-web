@@ -1268,6 +1268,12 @@ def solve(model, spec, progress=None, checkpoint=None, resume=None, every=300.0)
             msgs.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다")
     sh = make(X, ptable)
     if quad:
+        from .shell_quad import device
+
+        dv = device()
+        pr = os.environ.get("FEMWEB_HESS", "float32" if dv == "mps" else "float64").lower()
+        msgs.append(f"계산 장치: 요소 강성 {dv} {pr}, CPU 스레드 {torch.get_num_threads()}")
+    if quad:
         T = sh.tris
         tt = sh.thick
     fext = np.zeros(sh.ndof)

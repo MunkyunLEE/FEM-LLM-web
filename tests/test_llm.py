@@ -54,7 +54,7 @@ def test_llm_ops_are_validated_and_applied(client):
     assert len(r["spec"]["bcs"]) == 1
     sent = SEEN[0]
     assert sent["model"] == "qwen3:mock" and sent["response_format"] == {"type": "json_object"}
-    assert sent["messages"][-1]["content"].endswith("/no_think")
+    assert sent["messages"][-1]["content"] == "왼쪽 끝 고정, 오른쪽 끝에 아래로 2 kN"
     assert "MODEL:" in sent["messages"][1]["content"] and '"beam"' in sent["messages"][1]["content"]
 
 
@@ -190,3 +190,35 @@ def test_undo_and_run_action(client):
         assert client.post("/api/undo").json()["spec"]["loads"][0]["vector"] == [0.0, 0.0, -1000.0]
     finally:
         server.S["llm"]["mode"] = "llm"
+
+
+def test_llm_unconfigured_uses_rules_only():
+    from femweb import llm
+
+    assert not llm.configured({"url": "", "model": ""})
+    assert llm.llm_status({"url": "", "model": "", "key": ""})["ok"] is False
+    assert llm.provider("") == "미설정"
+    old = dict(server.S["llm"])
+    server.S["llm"].update({"url": "", "model": "", "mode": "rule_first", "key": ""})
+    try:
+        c = TestClient(server.app)
+        c.post("/api/examples/cantilever_beam?preset=0")
+        r = c.post("/api/chat", json={"text": "x 최소 면을 고정해줘"}).json()
+        assert r["chat"]["engine"] == "rule" and len(r["spec"]["bcs"]) == 1
+    finally:
+        server.S["llm"].update(old)
+
+
+def test_proxy_is_used_for_remote_hosts_only(monkeypatch):
+    import urllib.parse
+    from femweb import llm
+
+    monkeypatch.setenv("https_proxy", "http://user:pw@10.0.0.1:8080")
+    monkeypatch.setenv("no_proxy", "localhost,127.0.0.1,.corp.local")
+    assert llm._proxy(urllib.parse.urlsplit("http://127.0.0.1:9/v1")) is None
+    assert llm._proxy(urllib.parse.urlsplit("https://gw.corp.local/v1")) is None
+    p = llm._proxy(urllib.parse.urlsplit("https://api.openai.com/v1"))
+    assert p.hostname == "10.0.0.1" and p.port == 8080
+    c, path, extra = llm._connect("https://api.openai.com/v1/chat/completions", 5)
+    assert c.host == "10.0.0.1" and c._tunnel_host == "api.openai.com" and path == "/v1/chat/completions"
+    assert c._tunnel_headers["Proxy-Authorization"].startswith("Basic ")

@@ -17,7 +17,18 @@
 
 단위는 mm · N · tonne · s · MPa 입니다.
 
-## 설치 (macOS, Apple Silicon 기준)
+## 설치 (WSL2 Ubuntu, 회사 PC)
+
+Windows 회사 PC 에서는 WSL2 Ubuntu 안에서 돌리는 것을 기본으로 합니다. 자세한 절차(프록시, 사내 인증서, NVIDIA GPU, 메모리 설정)는 [docs/WSL.md](docs/WSL.md) 에 있습니다.
+
+```bash
+git clone -b wip/shell-solver https://github.com/MunkyunLEE/FEM-LLM-web.git ~/FEM-LLM-web
+cd ~/FEM-LLM-web
+./scripts/setup_wsl.sh --apt
+./scripts/run_wsl.sh
+```
+
+## 설치 (macOS, Apple Silicon)
 
 ```bash
 git clone https://github.com/MunkyunLEE/FEM-LLM-web.git
@@ -37,15 +48,7 @@ brew install costerwi/homebrew-calculix/calculix-ccx
 
 설치된 실행 파일 이름이 `ccx` 가 아니면 (`ccx_2.22` 등) 자동으로 찾습니다. 못 찾으면 `export FEMWEB_CCX=/경로/ccx_2.22` 로 지정합니다.
 
-Ollama (로컬 LLM, 선택):
-
-```bash
-brew install ollama        # 또는 https://ollama.com/download 의 앱 설치
-ollama serve               # 앱으로 설치했다면 생략
-ollama pull qwen3:8b
-```
-
-LLM이 없어도 규칙 기반 해석기가 대신 동작하므로 화면 흐름은 그대로 쓸 수 있습니다.
+LLM 은 설치하지 않습니다. 기본은 규칙 기반 해석기만 쓰고, 화면 LLM 칸에 OpenAI 호환 엔드포인트(사내 게이트웨이, OpenAI, Gemini 등)와 모델 이름을 넣으면 그 LLM 을 함께 씁니다.
 
 ## 실행
 
@@ -55,7 +58,12 @@ python -m femweb
 
 브라우저에서 `http://127.0.0.1:8765` 가 열립니다. 서버가 화면까지 함께 제공하므로 별도 웹 호스팅은 필요 없습니다.
 
-환경변수: `FEMWEB_LLM_URL` (기본 `http://localhost:11434/v1`), `FEMWEB_LLM_MODEL` (기본 `qwen3:8b`), `FEMWEB_LLM_KEY`, `FEMWEB_LLM_MODE` (`auto` · `llm` · `rule`), `FEMWEB_CCX`, `FEMWEB_LLM_THINK` (1 이면 Qwen3 의 생각 단계를 켬, 기본은 끔). 더 정확한 답이 필요하면 `qwen3:14b` 를 쓰세요 (느립니다). LLM 설정은 화면 오른쪽 위에서도 바꿀 수 있고, OpenAI 호환 엔드포인트면 어떤 것이든 연결됩니다.
+환경변수:
+- LLM: `FEMWEB_LLM_URL`(기본 비어 있음 = LLM 미사용), `FEMWEB_LLM_MODEL`, `FEMWEB_LLM_KEY`, `FEMWEB_LLM_MODE`(`rule_first` · `auto` · `llm` · `rule`, URL 이 없으면 `rule`), `FEMWEB_LLM_NOTHINK=1`(문장 끝에 `/no_think` 를 붙임, Qwen3 계열용)
+- 네트워크: LLM 호출은 `HTTPS_PROXY`·`NO_PROXY` 를 따르고, 사내 인증서는 `FEMWEB_CA_BUNDLE`(또는 `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`)로 지정합니다
+- 계산: `FEMWEB_CCX`, `FEMWEB_DEVICE`(`cpu` · `cuda` · `mps` · `auto`), `FEMWEB_HESS`, `FEMWEB_THREADS`
+
+LLM 설정은 화면에서도 바꿀 수 있습니다.
 
 ## 지오메트리 규칙
 
@@ -147,7 +155,7 @@ LLM은 `.inp` 를 쓰지 않고 아래 형태의 수정 지시만 냅니다. 서
 - **힌지 강성**: 길이당 κ (N·mm/rad/mm). 비워 두면 κ = 비율 × D / L (D 판 휨강성, L 패널 평균 변 길이)
 - **CalculiX의 접힘선**: 절점 분리 + 병진 구속(핀) + 회전 스프링 보. 평평한 2패널 시험에서 회전 스프링 보 이론과 6% 이내, 핀 조인트 3패널 예제는 힌지 보 이론과 일치, 핀 미우라는 바-힌지와 최대 변위 2% 이내입니다. 강성이 있는 미우라에서는 반력이 바-힌지의 약 0.8배이고 분할수 2·4·8에서 거의 같습니다(이전 띠 방식은 4~13배). 남은 차이의 원인은 아직 찾지 못했습니다. 이전 띠 방식은 `{"op":"set_hinge","method":"strip"}` 으로 쓸 수 있습니다
 - **TensorMesh 어댑터**: 2차 사면체 선형 정적, Neo-Hookean 기하비선형(Newton-CG). 좌굴·모달·소성·열·유체는 아직 연결하지 않았습니다
-- **LLM**: Ollama 실모델로는 아직 시험하지 못했습니다. 연결 흐름은 모의 서버로 시험했습니다
+- **LLM**: 실제 LLM 으로는 시험하지 못했습니다. 연결 흐름(프록시 터널 포함)은 모의 서버로 시험했습니다
 - 시험은 Linux에서 했습니다. macOS 실기 확인이 필요합니다
 
 ## 시험
@@ -201,7 +209,7 @@ CalculiX 에 맡기지 않고 직접 만든 쉘 솔버입니다. "자체 쉘 솔
 - **계산 속도**: 뉴턴 반복은 수렴이 빠른 동안 이전 강성 행렬의 LU 분해를 다시 쓰고(수정 뉴턴), 느려지거나 선 탐색·충돌 제한이 걸리면 새로 계산합니다. 선형 풀이는 대칭 정렬(MMD) SuperLU 입니다. 환경 변수로 더 빠르게 할 수 있습니다
   - `FEMWEB_THREADS`: PyTorch 스레드 수 (기본 auto = 코어 수의 절반, 최대 4)
   - `FEMWEB_HESS=float32`: 요소 강성 행렬만 단정밀도로 계산 (약 1.5배). 잔차는 배정밀도라 수렴한 해의 정확도는 같습니다
-  - `FEMWEB_DEVICE=mps`(Apple GPU) 또는 `cuda`: 요소 강성 행렬을 GPU 에서 단정밀도로 계산합니다. MPS 는 배정밀도가 없어 강성 행렬에만 씁니다
+  - `FEMWEB_DEVICE=cuda`(NVIDIA, WSL2 포함) 또는 `mps`(Apple GPU), `auto`(있는 GPU 자동 선택): 요소 강성 행렬을 GPU 에서 계산합니다. CUDA 는 배정밀도, MPS 는 배정밀도가 없어 단정밀도가 기본입니다. 선형 방정식 풀이는 CPU 입니다
   - `scikit-sparse` 가 설치되어 있으면 CHOLMOD 촐레스키 분해를 먼저 시도합니다 (macOS: `brew install suite-sparse` 후 `pip install scikit-sparse`). 양정치가 아니면 SuperLU 로 돌아갑니다. 끄려면 `FEMWEB_CHOLMOD=0`
 - **해석 재개**: `solve(model, spec, checkpoint="ck.pkl", every=300)` 으로 몇 초마다 솔버 상태(변형, 방향 벡터, 소성 변형률, 감쇠 속도, 이력, 프레임)를 저장하고, 끊기면 `resume="ck.pkl"` 로 그 지점부터 이어서 풉니다. 이어 푼 결과는 끊김 없이 푼 결과와 같습니다(시험으로 확인)
 - **결과 화면**: 쉘을 두께만큼 띄운 양면과 옆면으로 그리고("쉘 두께" 체크), 메쉬선은 원래 사각형 모서리만 표시합니다. 결과 막대의 PNG·GIF·영상 버튼으로 지금 화면이나 전체 프레임을 저장합니다(GIF 는 Pillow 필요, 영상은 브라우저에 따라 mp4 또는 webm)
