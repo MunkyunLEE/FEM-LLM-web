@@ -111,6 +111,7 @@ class Model:
             "nodes": self.nodes.round(6).tolist(),
             "beams": [list(map(int, b)) for b in self.beams],
             "shells": [list(map(int, s)) for s in self.shells],
+            "shell_group": list(self.shell_group),
             "boundary": self.solid_boundary().tolist(),
             "hinges": {k: [list(map(int, e)) for e in v] for k, v in self.hinges.items()},
         }

@@ -854,7 +854,8 @@ function renderControls() {
     .join(', ');
   const lo = st.model.bbox.min.map(fmt).join(', ');
   const hi = st.model.bbox.max.map(fmt).join(', ');
-  $('modelInfo').textContent = `${st.model.source}\n절점 ${c.nodes} · 보 ${c.beams} · 쉘 ${c.shells} · 솔리드 ${c.solids}\n범위 [${lo}] ~ [${hi}]\n그룹: ${g || '없음'}`;
+  const sz = st.model.bbox.max.map((v, i) => v - st.model.bbox.min[i]);
+  $('modelInfo').textContent = `${st.model.source}\n절점 ${c.nodes} · 보 ${c.beams} · 쉘 ${c.shells} · 솔리드 ${c.solids}\n크기 ${sz.map((v) => v.toFixed(3)).join(' × ')} mm (대각선 ${Math.hypot(...sz).toFixed(3)})\n범위 [${lo}] ~ [${hi}]\n그룹: ${g || '없음'}\n우클릭: 절점·엣지·면 정보`;
   const s = st.spec;
   $('solver').value = s.solver;
   $('divisions').value = s.divisions;
@@ -1251,6 +1252,182 @@ async function llmTest() {
   b.textContent = '실제 응답 테스트';
 }
 
+function viewTopo() {
+  const v = st.view;
+  if (v._edges) return v;
+  const seen = new Map();
+  const edges = [];
+  const add = (a, b) => {
+    const k = a < b ? a * 1e7 + b : b * 1e7 + a;
+    if (!seen.has(k)) {
+      seen.set(k, edges.length);
+      edges.push([Math.min(a, b), Math.max(a, b)]);
+    }
+  };
+  for (const f of v.shells) for (let i = 0; i < f.length; i++) add(f[i], f[(i + 1) % f.length]);
+  for (const f of v.boundary) for (let i = 0; i < 3; i++) add(f[i], f[(i + 1) % 3]);
+  for (const b of v.beams) add(b[0], b[1]);
+  const faces = v.shells.map((f, i) => ({ n: f, kind: '면', id: i, group: (v.shell_group || [])[i] })).concat(v.boundary.map((f, i) => ({ n: f, kind: '솔리드 표면 삼각형', id: i })));
+  v._edges = edges;
+  v._faces = faces;
+  return v;
+}
+
+function infoPos(i) {
+  const useRes = G.result.visible && R.mesh && R.mesh.nodes.length === st.view.nodes.length;
+  return useRes ? [R.pos[3 * i], R.pos[3 * i + 1], R.pos[3 * i + 2]] : st.view.nodes[i];
+}
+
+const f3 = (x) => (Math.abs(x) < 5e-4 ? 0 : x).toFixed(3);
+const vtxt = (a) => `(${a.map(f3).join(', ')})`;
+
+function pickInfo(ev) {
+  if (!st || !st.view) return;
+  const v = viewTopo();
+  const rect = canvas.getBoundingClientRect();
+  const mx = ev.clientX - rect.left;
+  const my = ev.clientY - rect.top;
+  const n = v.nodes.length;
+  const sx = new Float32Array(n);
+  const sy = new Float32Array(n);
+  const ok = new Uint8Array(n);
+  const q = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    const p = infoPos(i);
+    q.set(p[0], p[1], p[2]).project(camera);
+    if (q.z < -1 || q.z > 1) continue;
+    ok[i] = 1;
+    sx[i] = (q.x * 0.5 + 0.5) * rect.width;
+    sy[i] = (-q.y * 0.5 + 0.5) * rect.height;
+  }
+  const ray = new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2((mx / rect.width) * 2 - 1, -(my / rect.height) * 2 + 1), camera);
+  let hitFace = -1;
+  let hitDist = Infinity;
+  const tri = new THREE.Triangle();
+  const hp = new THREE.Vector3();
+  v._faces.forEach((f, k) => {
+    const P = f.n.map((i) => new THREE.Vector3(...infoPos(i)));
+    for (let j = 1; j < P.length - 1; j++) {
+      const h = ray.ray.intersectTriangle(P[0], P[j], P[j + 1], false, hp);
+      if (h) {
+        const d = h.distanceTo(ray.ray.origin);
+        if (d < hitDist) {
+          hitDist = d;
+          hitFace = k;
+        }
+      }
+    }
+  });
+  const depth = (i) => new THREE.Vector3(...infoPos(i)).distanceTo(ray.ray.origin);
+  const tol = hitDist === Infinity ? Infinity : hitDist + 1e-3 * (diag || 1);
+  let best = -1;
+  let bd = Infinity;
+  for (let i = 0; i < n; i++) {
+    if (!ok[i]) continue;
+    const d = (sx[i] - mx) ** 2 + (sy[i] - my) ** 2;
+    if (d < bd && depth(i) <= tol) {
+      bd = d;
+      best = i;
+    }
+  }
+  let ls = 0;
+  let nl = 0;
+  if (best >= 0)
+    for (const [a, b] of v._edges)
+      if ((a === best || b === best) && ok[a] && ok[b]) {
+        ls += Math.hypot(sx[b] - sx[a], sy[b] - sy[a]);
+        nl++;
+      }
+  ls = nl ? ls / nl : 40;
+  const rn = Math.min(8, 0.22 * ls);
+  const re = Math.min(5, 0.12 * ls);
+  if (Math.sqrt(bd) > rn) best = -1;
+  let be = -1;
+  if (best < 0) {
+    let ed = re * re;
+    v._edges.forEach(([a, b], k) => {
+      if (!ok[a] || !ok[b]) return;
+      const ux = sx[b] - sx[a];
+      const uy = sy[b] - sy[a];
+      const L2 = ux * ux + uy * uy || 1e-9;
+      const t = Math.max(0, Math.min(1, ((mx - sx[a]) * ux + (my - sy[a]) * uy) / L2));
+      const d = (sx[a] + t * ux - mx) ** 2 + (sy[a] + t * uy - my) ** 2;
+      if (d < ed) {
+        const pa = infoPos(a);
+        const pb = infoPos(b);
+        const pm = new THREE.Vector3(pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1]), pa[2] + t * (pb[2] - pa[2]));
+        if (pm.distanceTo(ray.ray.origin) <= tol) {
+          ed = d;
+          be = k;
+        }
+      }
+    });
+  }
+  clear(G.pick);
+  const hud = $('hud');
+  hud.innerHTML = '';
+  picked = null;
+  const mark = (pts, kind) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts.flat()), 3));
+    if (kind === 'pt') G.pick.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffc857, size: 11, sizeAttenuation: false, depthTest: false })));
+    else G.pick.add(new THREE.LineLoop(g, new THREE.LineBasicMaterial({ color: 0xffc857, depthTest: false })));
+  };
+  const lines = [];
+  let chip = '';
+  if (best >= 0) {
+    const p = infoPos(best);
+    const p0 = v.nodes[best];
+    picked = p0;
+    mark([p], 'pt');
+    lines.push(`절점 #${best + 1}`, `좌표 ${vtxt(p0)}`);
+    if (p !== p0) lines.push(`변형 후 ${vtxt(p)}`);
+    const deg = v._edges.filter(([a, b]) => a === best || b === best).length;
+    lines.push(`연결 엣지 ${deg}개`);
+    chip = `절점 (${p0.map((c) => +c.toFixed(4)).join(', ')})`;
+  } else if (be >= 0) {
+    const [a, b] = v._edges[be];
+    const pa = infoPos(a);
+    const pb = infoPos(b);
+    const d = pb.map((c, i) => c - pa[i]);
+    const L = Math.hypot(...d);
+    mark([pa, pb], 'ln');
+    lines.push(`엣지 #${be + 1} (절점 #${a + 1} → #${b + 1})`, `길이 ${f3(L)} mm`, `벡터 ${vtxt(d)}`, `방향 ${vtxt(d.map((c) => c / (L || 1)))}`);
+  } else if (hitFace >= 0) {
+    const f = v._faces[hitFace];
+    const P = f.n.map((i) => infoPos(i));
+    const nv = [0, 0, 0];
+    for (let j = 1; j < P.length - 1; j++) {
+      const u = P[j].map((c, i) => c - P[0][i]);
+      const w = P[j + 1].map((c, i) => c - P[0][i]);
+      nv[0] += 0.5 * (u[1] * w[2] - u[2] * w[1]);
+      nv[1] += 0.5 * (u[2] * w[0] - u[0] * w[2]);
+      nv[2] += 0.5 * (u[0] * w[1] - u[1] * w[0]);
+    }
+    const A = Math.hypot(...nv);
+    const c = [0, 1, 2].map((k) => P.reduce((s, p) => s + p[k], 0) / P.length);
+    mark(P, 'ln');
+    lines.push(`${f.kind} #${f.id + 1}${f.group ? ` (그룹 ${f.group})` : ''}`, `절점 ${f.n.map((i) => '#' + (i + 1)).join(', ')}`, `면적 ${f3(A)} mm²`, `법선 ${vtxt(nv.map((x) => x / (A || 1)))}`, `중심 ${vtxt(c)}`);
+    chip = `점 (${c.map((x) => +x.toFixed(4)).join(', ')})`;
+  } else return;
+  const box = el('div', 'pickinfo');
+  for (const t of lines) box.append(el('div', '', t));
+  hud.append(box);
+  const cp = el('button', '', '복사');
+  cp.onclick = () => navigator.clipboard && navigator.clipboard.writeText(lines.join('\n'));
+  hud.append(cp);
+  if (chip) {
+    const b = el('button', '', '지시문에 넣기');
+    b.onclick = () => {
+      const t = $('chatInput');
+      t.value += `${t.value && !t.value.endsWith(' ') ? ' ' : ''}${chip} `;
+      t.focus();
+    };
+    hud.append(b);
+  }
+}
+
 function pickNode(ev) {
   if (!st || !st.view) return;
   const rect = canvas.getBoundingClientRect();
@@ -1447,11 +1624,15 @@ function bind() {
   };
   $('llmSave').onclick = () => llmRefresh(true).catch((e) => note(e.message, true));
   let down = null;
-  canvas.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY]));
+  canvas.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY, e.button]));
   canvas.addEventListener('pointerup', (e) => {
-    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 4) pickNode(e);
+    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 4) {
+      if (down[2] === 2) pickInfo(e);
+      else if (down[2] === 0) pickNode(e);
+    }
     down = null;
   });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
 async function start() {

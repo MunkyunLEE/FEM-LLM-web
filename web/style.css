@@ -119,3 +119,5 @@ button.danger:hover{background:#7a2c3d}
 .plot .refrow span{flex:1}
 .mini{font-size:10px;padding:2px 6px}
 .plot label.mini{display:inline-block;margin-top:6px;cursor:pointer}
+#hud .pickinfo{color:var(--text);line-height:1.5;font-variant-numeric:tabular-nums}
+#hud .pickinfo div:first-child{font-weight:600;color:#ffc857}
