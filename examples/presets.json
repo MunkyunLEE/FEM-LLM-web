@@ -821,6 +821,214 @@
    }
   ]
  },
+ "tube_four_point": {
+  "title": "7e. 사각관 4점 굽힘 (강체 롤러 4개)",
+  "file": "four_point_tube.obj",
+  "note": "40x40x400 알루미늄 사각관(t=1, 벽당 8분할 5 mm 요소)을 반지름 10 mm 강체 롤러 4개로 4점 굽힘합니다. 받침 롤러(support_l, support_r) 간격 340 mm 는 고정, 하중 롤러(load_l, load_r) 간격 120 mm 를 아래로 30 mm 누릅니다. 롤러는 OBJ 의 별도 그룹(닫힌 메쉬)이고 '강체 부품 접촉'으로 지정해 해석 모델에서 빠지고 움직이는 강체 면이 됩니다. 관은 받침 위에 놓였을 뿐이라 좌우 대칭으로 중앙 단면 ux=0, y=0 선 uy=0 만 주고, 나머지 강체 운동은 감쇠가 잡습니다. 마찰 0.1, 레일리 감쇠 2%(스텝 시간 1.6 s = 1차 주기의 약 1000배). 롤러 반력과 에너지를 그립니다",
+  "prompts": [
+   "자체 쉘 솔버로",
+   "E 70000, 포아송비 0.3, 밀도 2.7e-9",
+   "소성 곡선 240@0, 275@0.02, 300@0.06, 330@0.2",
+   "두께 1",
+   "load_l 을 강체로 아래로 30 mm 눌러, 마찰 0.1",
+   "load_r 을 강체로 아래로 30 mm 눌러, 마찰 0.1",
+   "support_l 강체 받침으로, 마찰 0.1",
+   "support_r 강체 받침으로, 마찰 0.1",
+   "레일리 감쇠 2%, 스텝 시간 1.6초",
+   "증분 120",
+   "해석 실행"
+  ],
+  "ops": [
+   {
+    "op": "set_solver",
+    "solver": "shell"
+   },
+   {
+    "op": "set_material",
+    "name": "default",
+    "E": 70000.0,
+    "nu": 0.3,
+    "rho": 2.7e-09,
+    "curve": [
+     [
+      0.0,
+      240.0
+     ],
+     [
+      0.02,
+      275.0
+     ],
+     [
+      0.06,
+      300.0
+     ],
+     [
+      0.2,
+      330.0
+     ]
+    ]
+   },
+   {
+    "op": "set_section",
+    "group": "*",
+    "thickness": 1.0
+   },
+   {
+    "op": "add_contact",
+    "type": "rigid",
+    "shape": "mesh",
+    "body": {
+     "group": "load_l"
+    },
+    "motion": [
+     0,
+     0,
+     -30.0
+    ],
+    "friction": 0.1
+   },
+   {
+    "op": "add_contact",
+    "type": "rigid",
+    "shape": "mesh",
+    "body": {
+     "group": "load_r"
+    },
+    "motion": [
+     0,
+     0,
+     -30.0
+    ],
+    "friction": 0.1
+   },
+   {
+    "op": "add_contact",
+    "type": "rigid",
+    "shape": "mesh",
+    "body": {
+     "group": "support_l"
+    },
+    "motion": [
+     0,
+     0,
+     0
+    ],
+    "friction": 0.1
+   },
+   {
+    "op": "add_contact",
+    "type": "rigid",
+    "shape": "mesh",
+    "body": {
+     "group": "support_r"
+    },
+    "motion": [
+     0,
+     0,
+     0
+    ],
+    "friction": 0.1
+   },
+   {
+    "op": "add_bc",
+    "name": "중앙 단면 x 대칭",
+    "dofs": [
+     1
+    ],
+    "select": {
+     "and": [
+      {
+       "group": "tube"
+      },
+      {
+       "plane": {
+        "axis": "x",
+        "at": 0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "op": "add_bc",
+    "name": "y=0 선 y 대칭",
+    "dofs": [
+     2
+    ],
+    "select": {
+     "and": [
+      {
+       "group": "tube"
+      },
+      {
+       "plane": {
+        "axis": "y",
+        "at": 0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "op": "set_step",
+    "type": "static",
+    "increments": 120,
+    "damping": {
+     "kind": "rayleigh",
+     "zeta": 2.0,
+     "time": 1.6
+    }
+   },
+   {
+    "op": "add_plot",
+    "title": "롤러 반력-하중 롤러 변위",
+    "x": {
+     "quantity": "contact.disp"
+    },
+    "series": [
+     {
+      "quantity": "contact.ct1.force"
+     },
+     {
+      "quantity": "contact.ct2.force"
+     },
+     {
+      "quantity": "contact.ct3.force"
+     },
+     {
+      "quantity": "contact.ct4.force"
+     }
+    ]
+   },
+   {
+    "op": "add_plot",
+    "title": "에너지-하중 롤러 변위",
+    "x": {
+     "quantity": "contact.disp"
+    },
+    "series": [
+     {
+      "quantity": "energy.strain"
+     },
+     {
+      "quantity": "energy.plastic"
+     },
+     {
+      "quantity": "energy.damping"
+     },
+     {
+      "quantity": "energy.friction"
+     },
+     {
+      "quantity": "energy.total"
+     },
+     {
+      "quantity": "energy.external"
+     }
+    ]
+   }
+  ]
+ },
  "cantilever_solid": {
   "title": "5a. 캔틸레버 빔 (솔리드 요소)",
   "file": "cantilever_solid.stl",

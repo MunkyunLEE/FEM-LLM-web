@@ -217,7 +217,16 @@ function buildRigid() {
     const hot = c.id === highlightId;
     const mat = new THREE.MeshBasicMaterial({ color: hot ? 0xffc857 : 0x9aa7b8, wireframe: true, transparent: true, opacity: 0.55 });
     let o;
-    if (c.shape === 'sphere') {
+    if (c.shape === 'mesh') {
+      const rm = R.mesh && (R.mesh.rigid || []).find((q) => q.id === c.id && q.V);
+      if (!rm) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rm.V.flat()), 3));
+      g.setIndex(rm.F.flat());
+      o = new THREE.Mesh(g, mat);
+      o.userData.base = [0, 0, 0];
+      o.userData.resultOnly = true;
+    } else if (c.shape === 'sphere') {
       o = new THREE.Mesh(new THREE.SphereGeometry(c.radius, 28, 18), mat);
       o.userData.base = c.center;
     } else {
@@ -234,8 +243,9 @@ function buildRigid() {
     if (mv.length() > 0) {
       const len = Math.max(mv.length(), diag * 0.08);
       const a = new THREE.ArrowHelper(mv.clone().normalize(), new THREE.Vector3(0, 0, 0), len, 0x6ee7b7, diag * 0.03, diag * 0.015);
-      a.userData.base = o.userData.base;
+      a.userData.base = c.shape === 'mesh' ? [0, 1, 2].map((k) => o.geometry.attributes.position.array.filter((_, i) => i % 3 === k).reduce((s, v, _, arr) => s + v / arr.length, 0)) : o.userData.base;
       a.userData.motion = c.motion;
+      a.userData.resultOnly = o.userData.resultOnly;
       G.rigid.add(a);
     }
   }
@@ -443,6 +453,7 @@ async function loadResult() {
   R.auto = true;
   $('resultbar').hidden = false;
   $('showResult').checked = true;
+  buildRigid();
   await showFrame();
   applyVisibility();
 }
@@ -601,6 +612,7 @@ function applyVisibility() {
   G.edges.visible = $('showEdges').checked && !res;
   G.symbols.visible = $('showSymbols').checked;
   G.rigid.visible = $('showSymbols').checked;
+  for (const o of G.rigid.children) if (o.userData.resultOnly) o.visible = res;
   if (!res) placeRigid(0);
   $('legend').hidden = !res;
   $('resultbar').hidden = !R.mesh;
@@ -729,7 +741,7 @@ function renderLists() {
     const it = el('div', 'item' + (highlightId === c.id ? ' sel' : ''));
     const top = el('div', 'top');
     const nm = el('span');
-    nm.append(el('span', 'id', c.id), document.createTextNode(c.type === 'rigid' ? (c.shape === 'sphere' ? '강체 구' : '강체 평면') : c.type === 'self' ? '자기 접촉' : '접촉 쌍'));
+    nm.append(el('span', 'id', c.id), document.createTextNode(c.type === 'rigid' ? (c.shape === 'sphere' ? '강체 구' : c.shape === 'mesh' ? `강체 부품 ${c.body && c.body.group ? c.body.group : ''}` : '강체 평면') : c.type === 'self' ? '자기 접촉' : '접촉 쌍'));
     const x = el('button', 'x', '✕');
     x.onclick = (e) => {
       e.stopPropagation();

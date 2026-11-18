@@ -30,6 +30,17 @@ def _edges(model):
     return out
 
 
+def solid_only(model):
+    return model.solids is not None and len(model.solids) > 0 and not len(model.shells) and not len(model.beams)
+
+
+def distributed_moment(P, M):
+    r = P - P.mean(0)
+    J = (r * r).sum() * np.eye(3) - r.T @ r
+    w = np.linalg.lstsq(J, M, rcond=None)[0]
+    return np.cross(w[None, :], r)
+
+
 def assemble(model, spec):
     res = {"node": [], "edge": [], "face": [], "moment": [], "gravity": None, "total": np.zeros(3)}
     faces = None
@@ -44,6 +55,10 @@ def assemble(model, spec):
             raise ValueError(f"하중 {ld['id']} 의 대상 절점이 0개입니다")
         sel = set(ids.tolist())
         if t == "moment":
+            if ld.get("mode") == "distributed" or (ld.get("mode") in (None, "auto") and solid_only(model)):
+                for i, f in zip(ids, distributed_moment(model.nodes[ids], np.array(ld["vector"], dtype=float))):
+                    res["node"].append((int(i), f))
+                continue
             v = np.array(ld["vector"], dtype=float) / len(ids)
             res["moment"] += [(int(i), v) for i in ids]
             continue

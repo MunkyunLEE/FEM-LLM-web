@@ -979,7 +979,19 @@ class IPCContact:
             if not np.any(mv):
                 continue
             V = self.rest[nodes] + lam0 * mv
-            if len(V) == 4:
+            if ob.get("kind") == "mesh":
+                from scipy.spatial import cKDTree
+
+                from ..contact import _closest
+
+                Fo = np.asarray(ob["F"], int)
+                el = float(np.linalg.norm(V[Fo[:, 0]] - V[Fo[:, 1]], axis=1).max())
+                cand = np.where(np.array([len(q) > 0 for q in cKDTree(V).query_ball_point(P, reach + el)], bool))[0]
+                dist = np.full(len(P), np.inf)
+                if len(cand):
+                    d, _ = _closest(P[cand][:, None, :], V[Fo[:, 0]][None], V[Fo[:, 1]][None], V[Fo[:, 2]][None])
+                    dist[cand] = d.min(1)
+            elif len(V) == 4:
                 nn = np.cross(V[1] - V[0], V[2] - V[0])
                 nn = nn / np.linalg.norm(nn)
                 dist = np.abs((P - V[0]) @ nn)
@@ -1274,7 +1286,16 @@ def solve(model, spec, progress=None, checkpoint=None, resume=None, every=300.0)
             old[k] = os.environ.get(k)
             os.environ[k] = str(v)
     try:
-        return _solve_model(model, spec, progress, checkpoint, resume, every)
+        from ..contact import split_rigid
+        from ..spec import section_for
+
+        tmax = max((float(section_for(spec, g)["thickness"]) for g in set(model.shell_group)), default=0.0)
+        sub, sp, used = split_rigid(model, spec, 0.75 * tmax)
+        res = _solve_model(sub, sp, progress, checkpoint, resume, every)
+        if used is not None:
+            res.summary.setdefault("참고", [])
+            res.summary["참고"].append(f"강체 부품 {', '.join(c['id'] for c in sp['contacts'] if c.get('shape') == 'mesh')}: 해석 모델에서 빼고 이동하는 강체 접촉면으로 썼습니다 (닫힌 부품은 면을 두께 절반+장벽 범위만큼 안쪽으로 옮김). 결과 절점은 변형체 {len(used)}개입니다")
+        return res
     finally:
         for k, v in old.items():
             if v is None:
@@ -1492,6 +1513,8 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
                     o = o + 0.0037 * ext * t1 + 0.0023 * ext * t2
                     q = np.array([o - ext * t1 - ext * t2, o + ext * t1 - ext * t2, o + ext * t1 + ext * t2, o - ext * t1 + ext * t2])
                     obstacles.append({"V": q, "F": np.array([[0, 1, 2], [0, 2, 3]]), "motion": mv})
+                elif c["shape"] == "mesh":
+                    obstacles.append({"V": np.asarray(c["V"], float), "F": np.asarray(c["F"], int), "motion": mv, "kind": "mesh"})
                 else:
                     v, f = icosphere(3)
                     r = max(float(c["radius"]) - off, 1e-6)

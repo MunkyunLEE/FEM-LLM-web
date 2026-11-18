@@ -604,6 +604,20 @@ def parse_contact(c, model, spec):
     for g in sorted(names, key=len, reverse=True):
         if c.take(r"(?<![a-z0-9_])" + re.escape(g.lower()) + r"(?![a-z0-9_])"):
             found.append(g)
+    if len(found) == 1 and not (sphere or plane or pair_word or rad is not None) and c.has(r"강체|rigid"):
+        c.takeall(r"강체\s*(?:로|처럼|화)?|rigid(?:\s*body)?")
+        d = direction(c, model) or loose_axis(c)
+        m = c.take(NUM + r"\s*(mm|cm|m)(?![a-z])\s*(?:만큼|까지|씩)?")
+        dist = abs(_f(m)) * {"mm": 1.0, "cm": 10.0, "m": 1000.0}[m.group(2)] if m else 0.0
+        c.takeall(r"부품|파트|그룹|을|를|은|는|만|으로|로|설정|지정|만들어|해\s*줘|해줘|두고|하고|취급")
+        moving = c.take(r"눌러|누르|압입|밀어|내려|올려|이동|움직|press|push|move") is not None
+        contact = c.take(r"접촉\w*|contact|고정\s*(?:된|한)?\s*(?:받침|지지)?|받침|지지\w*|support") is not None
+        if dist > 0 or moving or contact:
+            v = d["vec"] if d else [0.0, 0.0, -1.0]
+            op = {"op": "add_contact", "type": "rigid", "shape": "mesh", "body": {"group": found[0]}, "motion": [x * dist + 0.0 for x in v], "friction": mu or 0.0}
+            return [op], [], [], c.leftover(), {}
+        c.takeall(r"묶어\w*|묶고|연결\w*")
+        return [{"op": "add_coupling", "select": {"group": found[0]}, "rigid": True, "name": f"강체 {found[0]}"}], [], [], c.leftover(), {}
     if not (sphere or plane or pair_word or len(found) >= 2 or rad is not None):
         if mu is not None:
             c.takeall(r"접촉|contact|으로|로|바꿔|변경|수정|설정|적용")
@@ -1324,18 +1338,19 @@ def parse_clause(text, model, spec, ctx):
             sel = ctx["sel"]
             c.takeall(r"거기|같은\s*(?:곳|위치)|그\s*(?:곳|위치|면)|same")
         op = {"op": "add_bc"}
+        anti = c.take(r"반\s*대칭|역\s*대칭|anti\s*-?\s*symm\w*|asymm\w*") is not None
         sym = c.take(r"(?<![a-z])([xyz])\s*(?:축|방향)?\s*대칭|(?<![a-z])([xyz])\s*-?\s*symm\w*|(xy|yx|yz|zy|zx|xz)\s*(?:평면|면|plane)?\s*(?:에\s*대해|에\s*대한)?\s*대칭|(xy|yx|yz|zy|zx|xz)\s*-?\s*(?:plane)?\s*symm\w*")
         if sym:
             g = sym.groups()
             a = g[0] or g[1] or next(ch for ch in AX if ch not in (g[2] or g[3]))
-            op.update({"type": a + "symm", "name": f"{a} 대칭"})
+            op.update({"type": a + ("asymm" if anti else "symm"), "name": f"{a} {'반대칭' if anti else '대칭'}"})
             if sel is None:
                 sel = _plane(a, "min")
                 notes.append(f"대칭면 위치를 {a} 최소 면으로 보았습니다")
-        elif c.take(r"대칭|symm\w*"):
+        elif anti or c.take(r"대칭|symm\w*"):
             ps = [p for p in sel_planes(sel)] if sel else []
             if len(ps) == 1:
-                op.update({"type": ps[0]["axis"] + "symm", "name": f"{ps[0]['axis']} 대칭"})
+                op.update({"type": ps[0]["axis"] + ("asymm" if anti else "symm"), "name": f"{ps[0]['axis']} {'반대칭' if anti else '대칭'}"})
             else:
                 ask.append("대칭 방향을 알려주세요 (예: x 최소 면에 x 대칭)")
         else:
@@ -1396,7 +1411,7 @@ def describe_op(o):
     k = o["op"]
     if k == "add_bc":
         d = o.get("dofs")
-        what = {"fixed": "완전 고정", "pinned": "병진 구속(핀)"}.get(o.get("type"), o.get("type") or "") if not d else "자유도 " + ",".join("u" + AX[i - 1] if i <= 3 else "r" + AX[i - 4] for i in d)
+        what = {"fixed": "완전 고정", "pinned": "병진 구속(핀)", "xsymm": "x 대칭 (ux, ry, rz)", "ysymm": "y 대칭 (uy, rx, rz)", "zsymm": "z 대칭 (uz, rx, ry)", "xasymm": "x 반대칭 (uy, uz, rx)", "yasymm": "y 반대칭 (ux, uz, ry)", "zasymm": "z 반대칭 (ux, uy, rz)"}.get(o.get("type"), o.get("type") or "") if not d else "자유도 " + ",".join("u" + AX[i - 1] if i <= 3 else "r" + AX[i - 4] for i in d)
         v = o.get("value")
         return f"구속: {describe(o.get('select'))} → {what}" + (f" = {v:g}" if v else "")
     if k == "add_load":
@@ -1419,8 +1434,12 @@ def describe_op(o):
         mv = ", 이동 [" + ", ".join(f"{v:g}" for v in o.get("motion", [0, 0, 0])) + "] mm"
         if o.get("shape") == "sphere":
             return f"강체 구 접촉 추가: 반지름 {o['radius']:g} mm{mv}{mu}"
+        if o.get("shape") == "mesh":
+            return f"강체 부품 접촉 추가: {describe(o.get('body'))} 를 변형하지 않는 접촉 형상(강체)으로{mv}{mu}"
         return f"강체 평면 접촉 추가: 법선 [" + ", ".join(f"{v:g}" for v in o.get("normal", [0, 0, 1])) + f"]{mv}{mu}"
     if k == "add_coupling":
+        if o.get("rigid"):
+            return f"강체 지정: {describe(o.get('select'))} 의 모든 절점을 기준점 하나에 묶어 강체로 움직임 (기준점에 하중·변위·구속)"
         return f"기준점 커플링: {describe(o.get('select'))} 의 절점을 기준점 하나에 강체로 묶음"
     if k == "update" and str(o.get("id", "")).startswith("cp"):
         parts = []

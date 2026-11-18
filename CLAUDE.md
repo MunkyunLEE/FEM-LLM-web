@@ -32,6 +32,9 @@
 - 에너지 이력 `energy.*` 와 `energy.external` 의 균형 오차를 결과 검증에 씀
 - 재개: `solve(model, spec, checkpoint=path, every=초, resume=path)`
 - 기준점 커플링: spec `couplings`(`add_coupling`, `update` 로 `fix`/`force`/`moment`), 자체 쉘은 `Augmented`(기준점 6자유도 추가) + `Coupling`(벌칙), CalculiX 는 `*RIGID BODY`. 시험 `tests/test_coupling.py`
+- 솔리드 모멘트·회전: `loads.distributed_moment`(면 모멘트 → 합력 0 절점 힘), `spec.solid_rotations`(솔리드 면 회전 구속 → 자동 기준점 `cp_<bcid>`), TensorMesh `_coupled_linear`. 시험 `tests/test_solid_coupling.py`
+- 대칭: `xsymm/ysymm/zsymm`, 반대칭 `xasymm/yasymm/zasymm`. CalculiX 쉘은 병진 성분만 구속
+- 강체 부품: 그룹 전체를 기준점에 묶기(`add_coupling` `rigid`) 또는 강체 접촉면(`add_contact` `shape: "mesh"`, `body`). 후자는 `contact.split_rigid` 가 부품을 빼고 선택을 절점 목록으로 바꾼 뒤 IPC 장애물로 넘김(자체 쉘만). 시험 `tests/test_rigid_part.py`
 - 진행 표시: `femweb/progress.py` (`context`, `stage`, `detail`), 서버 `GET /api/progress`
 - 환경 변수: `FEMWEB_DEVICE`(cpu/cuda/mps/auto), `FEMWEB_HESS`(float32/float64), `FEMWEB_THREADS`
 

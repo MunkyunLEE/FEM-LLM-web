@@ -290,7 +290,14 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
     if cx:
         L += cx["model"]
         notes += cx["notes"]
-    table = bc_table(model, spec)
+    SYM = ("xsymm", "ysymm", "zsymm", "xasymm", "yasymm", "zasymm")
+    if any(b.get("type") in SYM for b in spec["bcs"]):
+        sp2 = dict(spec)
+        sp2["bcs"] = [{**b, "dofs": [d for d in b["dofs"] if d <= 3]} if b.get("type") in SYM else b for b in spec["bcs"]]
+        table = bc_table(model, sp2)
+        notes.append("대칭·반대칭 조건은 CalculiX 에서 병진 구속만 걸었습니다 (쉘·보는 두께 방향으로 펼쳐 풀기 때문에 대칭면의 병진 구속이 회전도 막습니다. 회전까지 걸면 국부적으로 뻣뻣해집니다)")
+    else:
+        table = bc_table(model, spec)
     slaves = {b for _, b in ties}
     eq = [(b, a) for a, b in ties]
     for k0, k1 in tie_pairs:
@@ -358,6 +365,16 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
     zero = [(n, d) for (n, d), v in table.items() if v == 0.0 and not (solid_only and d > 3)]
     moving = [(n, d, v) for (n, d), v in table.items() if v != 0.0 and not (solid_only and d > 3)]
     for cp, ext, r1, r2 in cpn:
+        ex = set(ext)
+        moved = sorted({d for n, d in zero if n in ex} | {d for n, d, _ in moving if n in ex})
+        if moved:
+            zero = [(n, d) for n, d in zero if n not in ex]
+            moving = [(n, d, v) for n, d, v in moving if n not in ex]
+            fx = cp.get("fix") or {}
+            for d in moved:
+                if str(d) not in fx:
+                    zero.append((r1, d) if d <= 3 else (r2, d - 3))
+            notes.append(f"{cp['id']}: 기준점에 묶인 절점에 걸린 구속(자유도 {', '.join(str(d) for d in moved)})은 CalculiX 에서 기준점 구속으로 옮겼습니다")
         for dd, v in (cp.get("fix") or {}).items():
             j = int(dd)
             nd, k = (r1, j) if j <= 3 else (r2, j - 3)
@@ -725,11 +742,14 @@ def buckle_mode(model, base, spec):
 def solve(model, base, spec, progress=None):
     from ..control import disp_control
 
+    from ..spec import solid_rotations
+
+    spec, rnotes = solid_rotations(model, spec)
     orig = spec
     spec, ctl = disp_control(model, spec)
     st = spec["step"]
     kind = "static" if st["type"] == "arclength" else st["type"]
-    notes = []
+    notes = list(rnotes)
     perturb = None
     step = {"type": kind}
     if ctl:

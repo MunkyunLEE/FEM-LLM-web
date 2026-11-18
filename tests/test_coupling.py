@@ -88,3 +88,43 @@ def test_calculix_rigid_body_coupling():
     sp, _ = apply_ops(default_spec(m), _ops("calculix", {"fix": {"3": -0.1}}), m)
     r = C.solve(m, m, sp)
     assert r.history["rp.cp1.fz"][-1] == pytest.approx(-E * 2 * np.pi * R * T * 0.1 / L, rel=0.01)
+
+
+def _half():
+    full = _cyl()
+    X = full.nodes
+    keep = [f for f in full.shells if all(X[int(i), 0] >= -1e-6 for i in f)]
+    ids = sorted({int(i) for f in keep for i in f})
+    mp = {o: k for k, o in enumerate(ids)}
+    txt = "\n".join(f"v {X[i,0]:.9g} {X[i,1]:.9g} {X[i,2]:.9g}" for i in ids) + "\n"
+    txt += "\n".join("f " + " ".join(str(mp[int(i)] + 1) for i in f) for f in keep) + "\n"
+    return full, parse_obj(txt, "h.obj")
+
+
+def _sym_run(m, M, sym, solver):
+    ops = [{"op": "set_solver", "solver": solver}, {"op": "set_section", "thickness": T},
+           {"op": "add_bc", "type": "fixed", "select": {"plane": {"axis": "z", "at": "min"}}},
+           {"op": "add_coupling", "select": {"plane": {"axis": "z", "at": "max"}}, "ref": [0, 0, 200], "moment": [M, 0, 0]},
+           {"op": "set_step", "type": "static", "increments": 1}]
+    if sym:
+        ops.append({"op": "add_bc", "type": "xsymm", "select": {"plane": {"axis": "x", "at": "min"}}})
+    sp, _ = apply_ops(default_spec(m), ops, m)
+    r = S.solve(m, sp) if solver == "shell" else C.solve(m, m, sp)
+    return r.history["rp.cp1.rx"][-1]
+
+
+@pytest.mark.parametrize("solver", ["shell", pytest.param("calculix", marks=pytest.mark.skipif(C.find_ccx() is None, reason="ccx 없음"))])
+def test_symmetry_half_model_matches_full(solver):
+    full, half = _half()
+    a = _sym_run(full, 1e7, False, solver)
+    b = _sym_run(half, 5e6, True, solver)
+    assert b / a == pytest.approx(1.0, rel=0.01)
+
+
+def test_rules_symmetry_types():
+    m = _cyl()
+    sp = default_spec(m)
+    ops = rules.parse("x 최소면 대칭", m, sp)[0]
+    assert ops[0]["type"] == "xsymm"
+    ops = rules.parse("x 최소면 반대칭", m, sp)[0]
+    assert ops[0]["type"] == "xasymm"

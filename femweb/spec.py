@@ -10,6 +10,9 @@ BC_TYPES = {
     "xsymm": [1, 5, 6],
     "ysymm": [2, 4, 6],
     "zsymm": [3, 4, 5],
+    "xasymm": [2, 3, 4],
+    "yasymm": [1, 3, 5],
+    "zasymm": [1, 2, 6],
 }
 LOAD_TYPES = ("force", "moment", "pressure", "gravity")
 
@@ -106,6 +109,8 @@ def _coupling_fields(item, op, model, merge=False):
             item[f] = _vec(op[f] if op[f] is not None else [0, 0, 0], f)
     if "name" in op:
         item["name"] = str(op["name"])
+    if op.get("rigid"):
+        item["rigid"] = True
 
 
 def apply_ops(spec, ops, model=None):
@@ -121,8 +126,10 @@ def apply_ops(spec, ops, model=None):
         k = op["op"]
         if k == "add_bc":
             dofs = op.get("dofs")
+            btype = None
             if not dofs:
                 t = str(op.get("type", "fixed")).lower()
+                btype = t
                 if t not in BC_TYPES:
                     raise ValueError(f"알 수 없는 구속 종류: {t}")
                 dofs = BC_TYPES[t]
@@ -133,6 +140,8 @@ def apply_ops(spec, ops, model=None):
             if model is not None and len(resolve(model, sel)) == 0:
                 raise ValueError(f"구속 대상 절점이 0개입니다: {sel}")
             item = {"id": _next_id(spec["bcs"], "bc"), "name": op.get("name") or op.get("type") or "구속", "select": sel, "dofs": dofs, "value": _num(op.get("value", 0.0), "value")}
+            if btype:
+                item["type"] = btype
             spec["bcs"].append(item)
             log.append(f"구속 추가 {item['id']}")
         elif k == "add_load":
@@ -143,6 +152,10 @@ def apply_ops(spec, ops, model=None):
             if t in ("force", "moment"):
                 item["vector"] = _vec(op.get("vector"), "vector")
                 item["select"] = op.get("select") or {"all": True}
+                if t == "moment" and op.get("mode"):
+                    if op["mode"] not in ("auto", "nodal", "distributed"):
+                        raise ValueError("모멘트 mode 는 auto, nodal, distributed 중 하나여야 합니다")
+                    item["mode"] = op["mode"]
             elif t == "pressure":
                 item["value"] = _num(op.get("value"), "value")
                 item["select"] = op.get("select") or {"all": True}
@@ -165,13 +178,25 @@ def apply_ops(spec, ops, model=None):
                     raise ValueError("접촉 강성은 0보다 커야 합니다")
             if t == "rigid":
                 shape = str(op.get("shape", "sphere")).lower()
-                if shape not in ("sphere", "plane"):
-                    raise ValueError("강체 형상은 sphere 또는 plane 이어야 합니다")
+                if shape not in ("sphere", "plane", "mesh"):
+                    raise ValueError("강체 형상은 sphere, plane, mesh 중 하나여야 합니다")
                 item["shape"] = shape
                 item["motion"] = _vec(op.get("motion", [0, 0, 0]), "motion")
                 if op.get("target"):
                     item["target"] = op["target"]
-                if shape == "sphere":
+                if shape == "mesh":
+                    body = op.get("body")
+                    if isinstance(body, str):
+                        body = {"group": body}
+                    if not body:
+                        raise ValueError("강체 메쉬 접촉에는 강체로 쓸 부품(body, 예: {\"group\": \"body_2\"})이 필요합니다")
+                    item["body"] = body
+                    if model is not None:
+                        from .contact import rigid_faces
+
+                        if not rigid_faces(model, body):
+                            raise ValueError(f"강체 부품 안에 면 요소가 없습니다: {body}")
+                elif shape == "sphere":
                     item["radius"] = _num(op.get("radius"), "radius")
                     if item["radius"] <= 0:
                         raise ValueError("구 반지름은 0보다 커야 합니다")
@@ -181,7 +206,7 @@ def apply_ops(spec, ops, model=None):
                 else:
                     item["point"] = _vec(op["point"], "point") if op.get("point") is not None else None
                     item["normal"] = _vec(op["normal"], "normal") if op.get("normal") is not None else None
-                if item.get("center") is None and item.get("point") is None or shape == "plane" and item.get("normal") is None:
+                if shape != "mesh" and (item.get("center") is None and item.get("point") is None or shape == "plane" and item.get("normal") is None):
                     if model is None:
                         raise ValueError("강체 위치(center 또는 point)를 자동으로 정하려면 모델이 필요합니다")
                     from .contact import place
@@ -426,6 +451,37 @@ def apply_ops(spec, ops, model=None):
         else:
             raise ValueError(f"알 수 없는 op: {k}")
     return spec, log
+
+
+def solid_rotations(model, spec):
+    from .loads import solid_only
+
+    if model is None or not solid_only(model):
+        return spec, []
+    rot = [b for b in spec["bcs"] if any(d > 3 for d in b["dofs"]) and b.get("type") not in BC_TYPES]
+    if not rot:
+        return spec, []
+    out = copy.deepcopy(spec)
+    out.setdefault("couplings", [])
+    notes = []
+    bcs = []
+    for b in out["bcs"]:
+        rd = [d for d in b["dofs"] if d > 3]
+        if not rd or b.get("type") in BC_TYPES:
+            bcs.append(b)
+            continue
+        ids = resolve(model, b["select"])
+        cp = {"id": f"cp_{b['id']}", "name": f"{b['id']} 회전 구속", "select": b["select"], "ref": [float(c) for c in model.nodes[ids].mean(0)], "fix": {str(d): float(b.get("value", 0.0)) for d in rd}, "force": [0.0, 0.0, 0.0], "moment": [0.0, 0.0, 0.0]}
+        out["couplings"].append(cp)
+        td = [d for d in b["dofs"] if d <= 3]
+        if td:
+            bcs.append({**b, "dofs": td})
+        v = float(b.get("value", 0.0))
+        what = "구속" if v == 0.0 else f"{v:g} rad 로 지정"
+        names = ", ".join("r" + "xyz"[d - 4] for d in rd)
+        notes.append(f"{b['id']}: 솔리드에는 회전 자유도가 없어, 면 절점을 기준점 {cp['id']} 에 묶고 기준점 회전({names})을 {what}했습니다")
+    out["bcs"] = bcs
+    return out, notes
 
 
 def warnings_for(spec, model):

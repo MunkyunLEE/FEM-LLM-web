@@ -169,6 +169,12 @@ def view(model, spec):
         if c["shape"] == "sphere":
             item["center"] = c["center"]
             item["radius"] = c["radius"]
+        elif c["shape"] == "mesh":
+            item["body"] = c.get("body")
+            try:
+                item["nodes"] = resolve(model, c["body"]).tolist()
+            except Exception as e:
+                item["error"] = str(e)
         else:
             item["point"] = c["point"]
             item["normal"] = c["normal"]
@@ -183,6 +189,10 @@ def describe(c):
         mv = ", 이동 [" + ", ".join(f"{v:g}" for v in c.get("motion", [0, 0, 0])) + "] mm"
         if c["shape"] == "sphere":
             return f"강체 구 R={c['radius']:g} 중심 (" + ", ".join(f"{v:g}" for v in c["center"]) + ")" + mv + mu
+        if c["shape"] == "mesh":
+            from .select import describe as dsel
+
+            return f"강체 부품 {dsel(c.get('body'))}" + mv + mu
         return "강체 평면 점 (" + ", ".join(f"{v:g}" for v in c["point"]) + ") 법선 (" + ", ".join(f"{v:g}" for v in c["normal"]) + ")" + mv + mu
     if c["type"] == "self":
         return "자기 접촉 (모든 면끼리)" + mu
@@ -219,6 +229,8 @@ def ccx_build(model, spec, nodes, eid, shell_eids, solid_eids, static):
         tag = f"C{k + 1}"
         K = float(c.get("stiffness") or default_stiffness(spec))
         mu = float(c.get("friction") or 0.0)
+        if c["type"] == "rigid" and c.get("shape") == "mesh":
+            raise ValueError(f"접촉 {c['id']}: 강체 메쉬(부품) 접촉은 자체 쉘 솔버만 지원합니다. 부품을 기준점에 강체로 묶는 방법(add_coupling rigid)은 모든 솔버에서 됩니다")
         if c["type"] == "rigid":
             tgt = surface(model, c.get("target"), own)
             if not tgt:
@@ -340,12 +352,103 @@ def record(res, spec, times, forces):
     res.rigid = [v for v in view_spec(spec) if v["type"] == "rigid"]
 
 
+def rigid_faces(model, body):
+    from .select import resolve
+
+    ids = set(resolve(model, body).tolist())
+    return [k for k, f in enumerate(model.shells) if all(int(i) in ids for i in f)]
+
+
+def _sel_keys(spec):
+    for key in ("bcs", "loads", "couplings"):
+        for it in spec.get(key) or []:
+            if "select" in it:
+                yield it, "select"
+    for c in spec.get("contacts") or []:
+        for k in ("target", "a", "b"):
+            if c.get(k):
+                yield c, k
+
+
+def split_rigid(model, spec, off):
+    import copy
+
+    from .model import Model
+    from .select import resolve
+
+    mesh = [c for c in contacts_of(spec) if c["type"] == "rigid" and c.get("shape") == "mesh"]
+    if not mesh:
+        return model, spec, None
+    rig = set()
+    bodies = {}
+    for c in mesh:
+        fs = rigid_faces(model, c["body"])
+        if not fs:
+            raise ValueError(f"{c['id']}: 강체 부품 안에 면 요소가 없습니다")
+        bodies[c["id"]] = fs
+        rig.update(fs)
+    keep_f = [k for k in range(len(model.shells)) if k not in rig]
+    if not keep_f:
+        raise ValueError("강체가 아닌 변형체 면이 없습니다")
+    used = sorted({int(i) for k in keep_f for i in model.shells[k]})
+    rnodes = {int(i) for k in rig for i in model.shells[k]}
+    shared = rnodes & set(used)
+    if shared:
+        raise ValueError(f"강체 부품과 변형체가 절점 {len(shared)}개를 공유합니다. 강체 부품은 따로 떨어진 메쉬여야 합니다")
+    mp = {o: k for k, o in enumerate(used)}
+    sub = Model()
+    sub.nodes = model.nodes[used].copy()
+    sub.shells = [[mp[int(i)] for i in model.shells[k]] for k in keep_f]
+    sub.shell_group = [model.shell_group[k] for k in keep_f]
+    sub.hinges = {g: [tuple(mp[int(i)] for i in e) for e in v if all(int(i) in mp for i in e)] for g, v in model.hinges.items()}
+    sub.hinges = {g: v for g, v in sub.hinges.items() if v}
+    sub.patches = {k: dict(v) for k, v in model.patches.items()}
+    sub.source = model.source
+    sub.kind = model.kind
+    sp = copy.deepcopy(spec)
+    for it, k in _sel_keys(sp):
+        ids = [mp[int(i)] for i in resolve(model, it[k]) if int(i) in mp]
+        if not ids:
+            raise ValueError(f"{it.get('id', '')}: 대상 절점이 모두 강체 부품에 있습니다")
+        it[k] = {"nodes": ids}
+    for c in sp["contacts"]:
+        if c.get("shape") != "mesh":
+            continue
+        fs = bodies[c["id"]]
+        vid = sorted({int(i) for k in fs for i in model.shells[k]})
+        vm = {o: k for k, o in enumerate(vid)}
+        V = model.nodes[vid].astype(float)
+        F = []
+        for k in fs:
+            f = [vm[int(i)] for i in model.shells[k]]
+            F += [[f[0], f[j], f[j + 1]] for j in range(1, len(f) - 1)]
+        F = np.array(F, int)
+        e = {}
+        for a, b in np.sort(np.vstack([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]), axis=1).tolist():
+            e[(a, b)] = e.get((a, b), 0) + 1
+        closed = all(v == 2 for v in e.values())
+        if closed and off > 0:
+            nrm = np.zeros_like(V)
+            fn = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
+            for q in range(3):
+                np.add.at(nrm, F[:, q], fn)
+            nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-30)
+            if ((V - V.mean(0)) * nrm).sum() < 0:
+                nrm = -nrm
+            V = V - off * nrm
+        c["V"] = V.tolist()
+        c["F"] = F.tolist()
+        c["closed"] = closed
+        c["nodes_full"] = vid
+    return sub, sp, used
+
+
 def view_spec(spec):
     out = []
     for c in contacts_of(spec):
         if c["type"] == "rigid":
             item = {"id": c["id"], "type": "rigid", "shape": c["shape"], "motion": c.get("motion", [0, 0, 0])}
-            for k in ("center", "radius", "point", "normal"):
+            for k in ("center", "radius", "point", "normal", "body", "V", "F"):
                 if k in c:
                     item[k] = c[k]
             out.append(item)
@@ -430,6 +533,8 @@ class TMContact:
         for c in contacts_of(spec):
             K = float(c.get("stiffness") or default_stiffness(spec))
             it = {"c": c, "K": K, "mu": float(c.get("friction") or 0.0)}
+            if c["type"] == "rigid" and c.get("shape") == "mesh":
+                raise ValueError(f"접촉 {c['id']}: 강체 부품 접촉은 자체 쉘 솔버만 지원합니다")
             if c["type"] == "rigid":
                 keep = pick(c.get("target"))
                 if not keep.any():

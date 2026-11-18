@@ -70,6 +70,45 @@ def square_tube_fine(a=40.0, L=120.0, npa=20):
     write("square_tube_fine.obj", "\n".join(out) + "\n")
 
 
+def four_point_tube(a=40.0, L=400.0, npa=8, t=1.0, R=10.0, w=60.0, sup=170.0, ld=60.0):
+    nx = int(round(npa * L / a))
+    h = 0.5 * a
+    ring = []
+    for side in range(4):
+        for i in range(npa):
+            q = -h + a * i / npa
+            ring.append([(q, -h), (h, q), (-q, h), (-h, -q)][side])
+    m = len(ring)
+    V = []
+    out = [f"# square tube {a:g}x{a:g}x{L:g} on two rollers, two loading rollers (four-point bending)", "g tube"]
+    for k in range(nx + 1):
+        for y, z in ring:
+            V.append((-0.5 * L + L * k / nx, y, z))
+    for k in range(nx):
+        for i in range(m):
+            p0, q0 = k * m + i, k * m + (i + 1) % m
+            out.append(f"f {p0 + 1} {q0 + 1} {q0 + m + 1} {p0 + m + 1}")
+    nc, ny = 32, 6
+    for name, xc, zc in (("load_l", -ld, h + 0.5 * t + R), ("load_r", ld, h + 0.5 * t + R), ("support_l", -sup, -h - 0.5 * t - R), ("support_r", sup, -h - 0.5 * t - R)):
+        out.append(f"g {name}")
+        b = len(V)
+        for j in range(ny + 1):
+            y = -0.5 * w + w * j / ny
+            for i in range(nc):
+                th = 2 * math.pi * i / nc
+                V.append((xc + R * math.cos(th), y, zc + R * math.sin(th)))
+        c0, c1 = len(V), len(V) + 1
+        V += [(xc, -0.5 * w, zc), (xc, 0.5 * w, zc)]
+        for j in range(ny):
+            for i in range(nc):
+                p0, q0 = b + j * nc + i, b + j * nc + (i + 1) % nc
+                out.append(f"f {p0 + 1} {q0 + 1} {q0 + nc + 1} {p0 + nc + 1}")
+        for i in range(nc):
+            out.append(f"f {c0 + 1} {b + (i + 1) % nc + 1} {b + i + 1}")
+            out.append(f"f {c1 + 1} {b + ny * nc + i + 1} {b + ny * nc + (i + 1) % nc + 1}")
+    write("four_point_tube.obj", "\n".join([out[0]] + [f"v {x:.6g} {y:.6g} {z:.6g}" for x, y, z in V] + out[1:]) + "\n")
+
+
 def cylinder_shell(R=50.0, L=200.0, nc=48, na=40):
     out = ["# cylindrical shell R=50 L=200", "g cylinder"]
     for j in range(na + 1):
@@ -328,6 +367,26 @@ PRESETS = {
             {"op": "add_plot", "title": "에너지-누름판 변위", "x": {"quantity": "contact.disp"}, "series": [{"quantity": "energy.strain"}, {"quantity": "energy.plastic"}, {"quantity": "energy.damping"}, {"quantity": "energy.friction"}, {"quantity": "energy.total"}, {"quantity": "energy.external"}]},
         ],
     },
+    "tube_four_point": {
+        "title": "7e. 사각관 4점 굽힘 (강체 롤러 4개)",
+        "file": "four_point_tube.obj",
+        "note": "40x40x400 알루미늄 사각관(t=1, 벽당 8분할 5 mm 요소)을 반지름 10 mm 강체 롤러 4개로 4점 굽힘합니다. 받침 롤러(support_l, support_r) 간격 340 mm 는 고정, 하중 롤러(load_l, load_r) 간격 120 mm 를 아래로 30 mm 누릅니다. 롤러는 OBJ 의 별도 그룹(닫힌 메쉬)이고 '강체 부품 접촉'으로 지정해 해석 모델에서 빠지고 움직이는 강체 면이 됩니다. 관은 받침 위에 놓였을 뿐이라 좌우 대칭으로 중앙 단면 ux=0, y=0 선 uy=0 만 주고, 나머지 강체 운동은 감쇠가 잡습니다. 마찰 0.1, 레일리 감쇠 2%(스텝 시간 1.6 s = 1차 주기의 약 1000배). 롤러 반력과 에너지를 그립니다",
+        "prompts": ["자체 쉘 솔버로", "E 70000, 포아송비 0.3, 밀도 2.7e-9", "소성 곡선 240@0, 275@0.02, 300@0.06, 330@0.2", "두께 1", "load_l 을 강체로 아래로 30 mm 눌러, 마찰 0.1", "load_r 을 강체로 아래로 30 mm 눌러, 마찰 0.1", "support_l 강체 받침으로, 마찰 0.1", "support_r 강체 받침으로, 마찰 0.1", "레일리 감쇠 2%, 스텝 시간 1.6초", "증분 120", "해석 실행"],
+        "ops": [
+            {"op": "set_solver", "solver": "shell"},
+            {"op": "set_material", "name": "default", "E": 70000.0, "nu": 0.3, "rho": 2.7e-9, "curve": [[0.0, 240.0], [0.02, 275.0], [0.06, 300.0], [0.2, 330.0]]},
+            {"op": "set_section", "group": "*", "thickness": 1.0},
+            {"op": "add_contact", "type": "rigid", "shape": "mesh", "body": {"group": "load_l"}, "motion": [0, 0, -30.0], "friction": 0.1},
+            {"op": "add_contact", "type": "rigid", "shape": "mesh", "body": {"group": "load_r"}, "motion": [0, 0, -30.0], "friction": 0.1},
+            {"op": "add_contact", "type": "rigid", "shape": "mesh", "body": {"group": "support_l"}, "motion": [0, 0, 0], "friction": 0.1},
+            {"op": "add_contact", "type": "rigid", "shape": "mesh", "body": {"group": "support_r"}, "motion": [0, 0, 0], "friction": 0.1},
+            {"op": "add_bc", "name": "중앙 단면 x 대칭", "dofs": [1], "select": {"and": [{"group": "tube"}, {"plane": {"axis": "x", "at": 0}}]}},
+            {"op": "add_bc", "name": "y=0 선 y 대칭", "dofs": [2], "select": {"and": [{"group": "tube"}, {"plane": {"axis": "y", "at": 0}}]}},
+            {"op": "set_step", "type": "static", "increments": 120, "damping": {"kind": "rayleigh", "zeta": 2.0, "time": 1.6}},
+            {"op": "add_plot", "title": "롤러 반력-하중 롤러 변위", "x": {"quantity": "contact.disp"}, "series": [{"quantity": "contact.ct1.force"}, {"quantity": "contact.ct2.force"}, {"quantity": "contact.ct3.force"}, {"quantity": "contact.ct4.force"}]},
+            {"op": "add_plot", "title": "에너지-하중 롤러 변위", "x": {"quantity": "contact.disp"}, "series": [{"quantity": "energy.strain"}, {"quantity": "energy.plastic"}, {"quantity": "energy.damping"}, {"quantity": "energy.friction"}, {"quantity": "energy.total"}, {"quantity": "energy.external"}]},
+        ],
+    },
     "cantilever_solid": {
         "title": "5a. 캔틸레버 빔 (솔리드 요소)",
         "file": "cantilever_solid.stl",
@@ -358,6 +417,7 @@ if __name__ == "__main__":
     cantilever_beam()
     shell_panel()
     square_tube_fine()
+    four_point_tube()
     cylinder_shell()
     panel_chain()
     miura()

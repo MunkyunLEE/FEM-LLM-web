@@ -91,17 +91,101 @@ def stress_fields(G, E, nu, finite=False):
     return out
 
 
+def _skew(r):
+    return np.array([[0.0, -r[2], r[1]], [r[2], 0.0, -r[0]], [-r[1], r[0], 0.0]])
+
+
+def _coupled_linear(model, spec, cps, pts, mids, K, F, mask, val, E, n):
+    import scipy.sparse as sp
+    from scipy.sparse.linalg import splu
+
+    from ..select import resolve
+
+    Ks = K.to_scipy_coo().tocsr()
+    N0 = 3 * n
+    N = N0 + 6 * len(cps)
+    edges = np.array(list(mids.keys()))
+    h = float(np.linalg.norm(pts[edges[:, 0]] - pts[edges[:, 1]], axis=1).mean()) if len(edges) else 1.0
+    k = 1e3 * E * h
+    rows, cols, vals = [], [], []
+
+    def blk(ri, ci, M):
+        rows.append(np.repeat(ri, len(ci)))
+        cols.append(np.tile(ci, len(ri)))
+        vals.append(np.asarray(M).ravel())
+
+    f = np.zeros(N)
+    f[:N0] = F.ravel()
+    m2 = np.zeros(N, bool)
+    m2[:N0] = mask
+    v2 = np.zeros(N)
+    v2[:N0] = val
+    rp = {}
+    I = np.eye(3)
+    for j, cp in enumerate(cps):
+        sel = {int(i) for i in resolve(model, cp["select"])}
+        ids = sorted(sel | {m for (a, b), m in mids.items() if a in sel and b in sel})
+        ref = np.asarray(cp["ref"], float)
+        base = N0 + 6 * j
+        U = np.arange(base, base + 3)
+        Q = np.arange(base + 3, base + 6)
+        S = np.zeros((3, 3))
+        SS = np.zeros((3, 3))
+        for i in ids:
+            Rk = _skew(pts[i] - ref)
+            X3 = 3 * i + np.arange(3)
+            blk(X3, X3, k * I)
+            blk(X3, U, -k * I)
+            blk(U, X3, -k * I)
+            blk(X3, Q, k * Rk)
+            blk(Q, X3, k * Rk.T)
+            S += Rk
+            SS += Rk.T @ Rk
+        blk(U, U, k * len(ids) * I)
+        blk(U, Q, -k * S)
+        blk(Q, U, -k * S.T)
+        blk(Q, Q, k * SS)
+        f[base : base + 3] = cp.get("force") or [0.0, 0.0, 0.0]
+        f[base + 3 : base + 6] = cp.get("moment") or [0.0, 0.0, 0.0]
+        for d, v in (cp.get("fix") or {}).items():
+            m2[base + int(d) - 1] = True
+            v2[base + int(d) - 1] = float(v)
+        rp[cp["id"]] = base
+    Kc = sp.coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))), shape=(N, N)).tocsr()
+    Ka = sp.bmat([[Ks, None], [None, sp.csr_matrix((N - N0, N - N0))]]).tocsr() + Kc
+    free = np.where(~m2)[0]
+    u = v2.copy()
+    rhs = f - Ka @ u
+    u[free] = splu(Ka[free][:, free].tocsc()).solve(rhs[free])
+    g = Ka @ u
+    reac = g - f
+    out = {"k": k, "f": f[N0:], "rp": {cid: (base, g[base : base + 6]) for cid, base in rp.items()}}
+    return u, reac, out
+
+
 def solve(model, spec, progress=None):
     if len(model.solids) == 0:
         raise ValueError("TensorMesh 솔버에는 솔리드(STL) 모델이 필요합니다")
     from ..control import disp_control, record as ctl_record
 
+    from ..spec import solid_rotations
+
+    spec, rot_notes = solid_rotations(model, spec)
+    cps = spec.get("couplings") or []
     orig = spec
     spec, ctl = disp_control(model, spec)
     st = dict(spec["step"])
+    if cps and (st.get("nlgeom") or st["type"] == "arclength"):
+        from . import calculix
+
+        if not calculix.find_ccx():
+            raise ValueError("기준점(커플링)이 있는 솔리드의 기하비선형 해석은 CalculiX 가 필요합니다")
+        r = calculix.solve(model, model, orig)
+        r.summary.setdefault("참고", []).insert(0, "TensorMesh 의 기하비선형 경로에는 기준점이 없어 CalculiX(C3D10 + *RIGID BODY)로 풀었습니다")
+        return r
     if st["type"] in ("buckle", "modal"):
         raise ValueError("TensorMesh 어댑터는 현재 정적 해석(선형, 기하비선형)만 지원합니다. 좌굴·모달은 CalculiX 솔버를 선택하세요")
-    pre_notes = []
+    pre_notes = list(rot_notes)
     if st["type"] == "arclength":
         st["nlgeom"] = True
         if not ctl:
@@ -158,7 +242,7 @@ def solve(model, spec, progress=None):
             if mask[3 * i + d] and mask[3 * j + d]:
                 mask[3 * m + d] = True
                 val[3 * m + d] = 0.5 * (val[3 * i + d] + val[3 * j + d])
-    if not mask.any():
+    if not mask.any() and not any(cp.get("fix") for cp in cps):
         raise ValueError("구속이 없습니다")
     asm = LinearElasticityElementAssembler.from_mesh(mesh, E=E, nu=nu)
     K = asm(mesh.points)
@@ -219,7 +303,17 @@ def solve(model, spec, progress=None):
         for c, nm in enumerate("xyz"):
             hist[f"reaction.{nm}"].append(float(r[c]))
 
-    if not st.get("nlgeom"):
+    if cps and not st.get("nlgeom"):
+        u, reac_all, cp_out = _coupled_linear(model, spec, cps, pts, mids, K, F, mask, val, E, n)
+        record(1.0, u[: 3 * n].reshape(n, 3), 0.5 * float(u @ (reac_all + np.concatenate([F.ravel(), cp_out["f"]]))), reac_all[: 3 * n], False)
+        for cid, (base, vals) in cp_out["rp"].items():
+            for k, nm in enumerate(("ux", "uy", "uz", "rx", "ry", "rz")):
+                hist[f"rp.{cid}.{nm}"] = [float(u[base + k])]
+            for k, nm in enumerate(("fx", "fy", "fz", "mx", "my", "mz")):
+                hist[f"rp.{cid}.{nm}"] = [float(vals[k])]
+        pre_notes.append(f"기준점 커플링 {len(cps)}개: 묶인 절점의 병진을 기준점의 강체 운동(소변형)에 벌칙 강성 {cp_out['k']:.3g} N/mm 로 묶었습니다 (선형)")
+        notes[:] = list(pre_notes)
+    elif not st.get("nlgeom"):
         cond = Condenser(torch.tensor(mask), torch.tensor(val, dtype=dt))
         Ki, fi = cond(K, f)
         u = cond.recover(Ki.solve(fi))
@@ -346,6 +440,13 @@ def solve(model, spec, progress=None):
         "반력 합 (N)": [round(hist[f"reaction.{c}"][-1], 4) for c in "xyz"],
         "프레임 수": len(res.frames),
     }
+    for cp in cps:
+        c = cp["id"]
+        if f"rp.{c}.ux" in hist:
+            res.summary[f"기준점 {c} 변위 (mm)"] = [round(hist[f"rp.{c}.u{a}"][-1], 6) for a in "xyz"]
+            res.summary[f"기준점 {c} 회전 (rad)"] = [round(hist[f"rp.{c}.r{a}"][-1], 6) for a in "xyz"]
+            res.summary[f"기준점 {c} 힘 (N)"] = [round(hist[f"rp.{c}.f{a}"][-1], 4) for a in "xyz"]
+            res.summary[f"기준점 {c} 모멘트 (N·mm)"] = [round(hist[f"rp.{c}.m{a}"][-1], 3) for a in "xyz"]
     if tmc is not None:
         from ..contact import record as crecord
 
