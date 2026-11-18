@@ -16,6 +16,8 @@ BH_DEFAULT = {
     "fold_percent": 10.0,
     "fold_k": None,
     "long_factor": 100.0,
+    "bar_area": None,
+    "tri_bars": "woodruff",
     "bar_yield": None,
     "bar_H": 0.0,
     "fold_yield": None,
@@ -25,6 +27,8 @@ BH_DEFAULT = {
     "contact": False,
     "gap": None,
     "tol": 3.0,
+    "cycles": 0,
+    "use_mass": True,
     "rest": {},
     "drivers": [],
     "targets": [],
@@ -68,6 +72,8 @@ def build(model, spec):
         "fold_percent": c["fold_percent"],
         "fold_k": c["fold_k"],
         "long_factor": c["long_factor"],
+        "bar_area": c["bar_area"],
+        "tri_bars": c["tri_bars"],
         "bar_yield": inf if c["bar_yield"] is None else float(c["bar_yield"]),
         "bar_H": float(c["bar_H"] or 0.0),
         "fold_yield": inf if c["fold_yield"] is None else float(c["fold_yield"]),
@@ -200,7 +206,7 @@ def solve(model, spec, progress=None):
         msgs.append("바-힌지 모델에는 회전 자유도가 없어 모멘트 하중은 무시했습니다")
     allfix = sorted(set(fixed) | set(disp))
     if kind == "modal":
-        return _modal(m, allfix, int(st.get("modes", 12)), msgs)
+        return _modal(m, allfix, int(st.get("modes", 12)), msgs, bool(c.get("use_mass", True)))
     if kind == "kinematic":
         if disp:
             msgs.append(f"기구 해석은 구동 주름 각도로 움직이므로 0 이 아닌 지정 변위 {len(disp)}개 자유도는 쓰지 않았습니다 (0 구속만 사용)")
@@ -210,14 +216,25 @@ def solve(model, spec, progress=None):
     if ct is not None:
         msgs.append(f"기하 접촉: 최소 간격 {ct.gap:.4g} mm (마찰·감쇠 없음), 처음 형상에서 이미 장벽 안에 든 쌍 {ct.rest_pairs}개")
     rest = _rest(m, c)
-    pb = Problem(m, fixed=fixed, disp=disp, force=force, rest=rest or None, contact=ct)
     n = max(1, int(st.get("increments", 25)))
+    cyc = int(c.get("cycles") or 0)
+    path = None
+    if cyc > 0 and kind != "arclength":
+        if not disp:
+            raise ValueError("반복 하중(cycles)은 지정 변위가 있어야 합니다")
+        dd = sorted(disp)
+        vv = np.array([disp[q] for q in dd], float)
+        path = (dd, lambda lam, vv=vv, cyc=cyc: vv * (1.0 - abs(1.0 - 2.0 * ((lam * cyc) % 1.0))) if lam < 1.0 else 0.0 * vv)
+        disp = {}
+        n = n * 2 * cyc
+        msgs.append(f"지정 변위를 0 → 목표 → 0 으로 {cyc}회 반복합니다 (증분 {n})")
+    pb = Problem(m, fixed=fixed, disp=disp, force=force, rest=rest or None, contact=ct, path=path)
     if kind == "arclength":
         if not force:
             raise ValueError("호장법(MGDCM)에는 힘 하중이 필요합니다")
         rec = solve_force(m, pb, increments=n, dlam=1.0 / max(4, n // 4), progress=cb)
     else:
-        if not disp and not force and not rest:
+        if not disp and not force and not rest and path is None:
             raise ValueError("하중, 지정 변위, 주름 목표각 중 하나가 필요합니다")
         rec = solve_displacement(m, pb, steps=n, progress=cb)
     msgs += rec.notes
@@ -226,7 +243,7 @@ def solve(model, spec, progress=None):
 
 def _static(m, rec, pb, c, msgs, kind):
     res = _base(m, "static")
-    keys = ("time", "load_factor", "energy.stretch", "energy.fold", "energy.bend", "energy.plastic", "energy.contact", "energy.total", "energy.external", "reaction.x", "reaction.y", "reaction.z", "u.max", "fold.mean", "contact.pairs", "iterations")
+    keys = ("time", "load_factor", "energy.stretch", "energy.fold", "energy.bend", "energy.plastic", "energy.contact", "energy.total", "energy.external", "reaction.x", "reaction.y", "reaction.z", "u.control", "u.max", "fold.mean", "contact.pairs", "iterations")
     hist = {k: [] for k in keys}
     watch = [parse_key(k) for k in (c.get("watch") or [])]
     widx = []
@@ -239,7 +256,16 @@ def _static(m, rec, pb, c, msgs, kind):
         hist[f"fold.e{ekey(e)}"] = []
         hist[f"moment.e{ekey(e)}"] = []
     fold = m.hkind == FOLD
-    pres = pb.pres
+    ctrl = np.where(pb.up != 0)[0]
+    if pb.path is not None:
+        ctrl = np.unique(np.concatenate([ctrl, np.asarray(pb.path[0], int)]))
+    pres = ctrl if len(ctrl) else pb.pres
+    cdir = np.zeros(m.ndof)
+    if len(ctrl):
+        ref = pb.up.copy()
+        if pb.path is not None:
+            ref[np.asarray(pb.path[0], int)] = np.asarray(pb.path[1](0.5 / max(int(c.get("cycles") or 1), 1)), float)
+        cdir[ctrl] = np.sign(ref[ctrl])
     for k in range(len(rec.lam)):
         U = rec.U[k].reshape(-1, 3)
         x = m.X + U
@@ -262,6 +288,7 @@ def _static(m, rec, pb, c, msgs, kind):
         hist["energy.external"].append(rec.extwork[k])
         for q, nm in enumerate("xyz"):
             hist[f"reaction.{nm}"].append(r[q])
+        hist["u.control"].append(float((rec.U[k] * cdir)[ctrl].mean()) if len(ctrl) else 0.0)
         hist["u.max"].append(float(np.linalg.norm(U, axis=1).max()))
         hist["fold.mean"].append(float(np.degrees(np.abs(th[fold] - m.th_init[fold])).mean()) if fold.any() else 0.0)
         hist["contact.pairs"].append(float(rec.contact[k].get("pairs", 0) + rec.contact[k].get("hinge_pairs", 0)) if rec.contact[k] else 0.0)
@@ -280,7 +307,7 @@ def _static(m, rec, pb, c, msgs, kind):
         "증분 수 / 평균 반복": [len(rec.lam) - 1, round(float(np.mean(rec.iters[1:])) if len(rec.iters) > 1 else 0.0, 2)],
         "계산 시간 (s)": round(rec.time, 3),
         "최대 변위 (mm)": hist["u.max"][-1],
-        "에너지 (늘림/접힘/휨/소성/접촉, N·mm)": [round(hist[k][-1], 8) for k in ("energy.stretch", "energy.fold", "energy.bend", "energy.plastic", "energy.contact")],
+        "에너지 (늘림/접힘/휨/소성/접촉, N·mm)": [float(f"{hist[k][-1]:.6g}") for k in ("energy.stretch", "energy.fold", "energy.bend", "energy.plastic", "energy.contact")],
         "외부 일 (N·mm)": ext,
         "에너지 균형 오차": round(abs(tot - ext) / max(abs(ext), 1e-30), 6) if abs(ext) > 0 else None,
     })
@@ -296,8 +323,8 @@ def _static(m, rec, pb, c, msgs, kind):
     return res
 
 
-def _modal(m, fixed, n, msgs):
-    use_mass = bool(np.all(m.mass > 0))
+def _modal(m, fixed, n, msgs, want_mass=True):
+    use_mass = want_mass and bool(np.all(m.mass > 0))
     r = modal(m, fixed=fixed, n=n + (0 if fixed else 6), use_mass=use_mass)
     res = _base(m, "modal")
     span = float(np.ptp(m.X, axis=0).max())

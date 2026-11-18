@@ -166,17 +166,21 @@ def solve_displacement(m, pb=None, steps=50, tol=1e-8, kmax=30, beta_min=1e-4, c
             step = c * du
             xn = xi.ravel().copy()
             xn[pb.free] += step
-            if pb.contact is not None:
-                a = min(1.0, 0.9 * pb.contact.stepsize(xi, xn.reshape(-1, 3)))
+            sz = pb.contact.stepsize(xi, xn.reshape(-1, 3)) if pb.contact is not None else 1.0
+            a0 = 1.0 if sz >= 1.0 else 0.9 * sz
+            a = a0
+            slope = float(Rf @ step)
+            if slope < 0:
                 e0 = _potential(pb, xi, st, lam1)
-                slope = float(Rf @ step)
-                for _ in range(30):
+                for _ in range(14):
                     xt = xi.ravel() + a * (xn - xi.ravel())
-                    if _potential(pb, xt.reshape(-1, 3), st, lam1) <= e0 + 1e-4 * a * slope + 1e-14 * abs(e0):
+                    if _potential(pb, xt.reshape(-1, 3), st, lam1) <= e0 + 1e-4 * a * slope + 1e-9 * abs(e0):
                         break
                     a *= 0.5
-                step = a * step
-                xn = xi.ravel() + a * (xn - xi.ravel())
+                else:
+                    a = a0
+            step = a * step
+            xn = xi.ravel() + a * (xn - xi.ravel())
             xi = xn.reshape(-1, 3)
             ref = max(float(np.abs(xi - m.X).max()), float(np.abs(m.X).max()) * 1e-6, 1e-12)
             rn = float(np.abs(Rf).max()) if len(Rf) else 0.0

@@ -1710,6 +1710,9 @@ function renderBH() {
   $('bhContact').checked = !!c.contact;
   $('bhGap').value = c.gap ?? '';
   $('bhGap').disabled = !c.contact;
+  $('bhCycles').value = c.cycles || '';
+  $('bhArea').value = c.bar_area ?? '';
+  $('bhMass').checked = c.use_mass !== false;
   if (document.activeElement !== $('bhTargets')) $('bhTargets').value = (c.targets || []).join(', ');
   const cnt = {};
   for (const e of BH.edges) cnt[e.type] = (cnt[e.type] || 0) + 1;
@@ -1873,6 +1876,9 @@ function bindBH() {
   const num = { bhBarY: 'bar_yield', bhBarH: 'bar_H', bhFoldY: 'fold_yield', bhFoldH: 'fold_H', bhBendY: 'bend_yield', bhBendH: 'bend_H', bhGap: 'gap', bhTol: 'tol' };
   for (const [id, f] of Object.entries(num)) $(id).onchange = (e) => setbh({ [f]: bhNum(e.target.value) ?? (f.endsWith('_H') ? 0 : f === 'tol' ? 3 : null) });
   $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
+  $('bhMass').onchange = (e) => setbh({ use_mass: e.target.checked });
+  $('bhCycles').onchange = (e) => setbh({ cycles: Math.max(0, Math.round(bhNum(e.target.value) || 0)) });
+  $('bhArea').onchange = (e) => setbh({ bar_area: bhNum(e.target.value) });
   const selFolds = () => [...BH.sel].filter((k) => (BH.edges.find((c) => ekey(c.edge) === k) || {}).type === 'fold');
   const targets = (n) => {
     const t = $('bhTargets').value.split(/[,\s]+/).filter(Boolean).map(Number);

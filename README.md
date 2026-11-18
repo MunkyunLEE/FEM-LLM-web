@@ -12,6 +12,7 @@
 | 용도 | 솔버 | 입력 |
 |---|---|---|
 | 간이 검토 (오리가미 접힘) | 바-힌지 자체 솔버 | OBJ 면(`f`) + `hinge_*` 선 |
+| 오리가미 정밀 해석 (탄소성·접촉·모드·기구) | BH-web (`bhweb` 패키지) | OBJ 삼각형·사각형 면 + `hinge_*` 선 |
 | 바·쉘 FEM | CalculiX | OBJ 선(`l`)·면(`f`) |
 | 솔리드 FEM | TensorMesh (CalculiX로도 가능) | STL (닫힌 표면) |
 
@@ -144,6 +145,25 @@ LLM은 `.inp` 를 쓰지 않고 아래 형태의 수정 지시만 냅니다. 서
 | `four_point_tube.obj` | 40×40×400 t1 알루미늄 사각관 4점 굽힘, R10 강체 롤러 4개(받침 340, 하중 120 mm), 30 mm (자체 쉘) | 최대 하중 7.85 kN(2.5 mm), 30 mm 에서 3.86 kN, 하중·받침 반력 차 0.9% 이내, 에너지 균형 0.03%, 감쇠 0.19% | 탄성 구간 보 이론 + 롤러 국부 변형 |
 | `cantilever_solid.stl` | 1000×50×100 솔리드 (TensorMesh tet10) | 처짐 0.3829 mm | 0.381 mm, CalculiX C3D10 0.3829 |
 | `cylinder_solid.stl` | R50/R40, L=200 축압축 100 kN | 축변형 0.03365 mm | PL/EA 0.0337 mm |
+
+## BH-web 바-힌지 (오리가미)
+
+`bhweb/` 은 웹과 무관한 계산 패키지입니다(MIT). femweb 에서는 솔버 `BH-web 바-힌지` 로 씁니다.
+
+- 패널은 삼각형·사각형만. 사각형 N5B8, 삼각형 Woodruff 2020 바, 바는 로그 변형률 탄소성 하나로 통일, 힌지는 선형·탄소성
+- 접힘 강성: 자동(E, ν, t, L*), 패널 굽힘강성 B 대비 %, 직접 값
+- 해석 종류: 정적(적응 감쇠 뉴턴, 반복 하중 `cycles`), 호장법(MGDCM), 모달(K 만 또는 K·M, free-free), 기구(강체 접힘 경로, 3D 해공간)
+- 기하 접촉: IPC 장벽 + 힌지각 장벽 + 연속 충돌 검사, 마찰·감쇠 없음
+- 주름 편집: `주름 편집 모드` 를 켜고 상자 선택(왼→오 완전 포함, 오→왼 걸침, Shift 추가, Ctrl 제외, Esc 해제) 후 접힘/휨/자름/자동
+- 논문 비교 예제 B1~B6 (Woodruff 띠, Tang 단일 주름·크레슬링, Filipov 평면 미우라 모드, 접촉 말아 접기, 미우라 기구). 결과 표는 원리 문서 4b
+- 벤치마크: `python -m bhweb.benchmarks`
+
+```python
+from bhweb import BHModel, Problem, solve_displacement
+from bhweb.shapes import miura
+X, F, cx, cy = miura(nx=4, ny=4)
+m = BHModel(X, F, crease_edges=cx + cy, params={"E": 3000, "nu": 0.3, "t": 0.5})
+```
 
 ## 원리 문서
 

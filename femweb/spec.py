@@ -392,15 +392,18 @@ def apply_ops(spec, ops, model=None):
             log.append(f"주름 {n}개 → {ty}")
         elif k == "set_bh":
             cur = dict(spec.get("bh") or {})
-            for f in ("fold_mode", "Lstar", "Lstar_ratio", "fold_percent", "fold_k", "long_factor", "bar_yield", "bar_H", "fold_yield", "fold_H", "bend_yield", "bend_H", "contact", "gap", "tol", "rest", "drivers", "targets", "plot3", "watch"):
+            for f in ("fold_mode", "Lstar", "Lstar_ratio", "fold_percent", "fold_k", "long_factor", "bar_area", "tri_bars", "bar_yield", "bar_H", "fold_yield", "fold_H", "bend_yield", "bend_H", "contact", "gap", "tol", "cycles", "use_mass", "rest", "drivers", "targets", "plot3", "watch"):
                 if f not in op:
                     continue
                 v = op[f]
                 if f == "fold_mode":
                     if v not in ("auto", "percent", "value"):
                         raise ValueError("fold_mode 는 auto, percent, value 중 하나여야 합니다")
-                elif f == "contact":
+                elif f in ("contact", "use_mass"):
                     v = bool(v)
+                elif f == "tri_bars":
+                    if v not in ("woodruff", "merlin2"):
+                        raise ValueError("tri_bars 는 woodruff 또는 merlin2 여야 합니다")
                 elif f in ("rest",):
                     v = {str(kk): float(vv) for kk, vv in (v or {}).items()}
                 elif f in ("drivers", "plot3", "watch"):

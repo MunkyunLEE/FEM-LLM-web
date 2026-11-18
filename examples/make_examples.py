@@ -230,6 +230,46 @@ def cylinder_solid(Ro=50.0, Ri=40.0, L=200.0, n=64):
     stl("cylinder_solid", tris)
 
 
+def _bh_obj(name, title, X, F, creases=(), group="panel"):
+    out = [f"# {title}", f"g {group}"]
+    out += ["v " + fmt(p) for p in X]
+    out += ["f " + " ".join(str(int(i) + 1) for i in f) for f in F]
+    if creases:
+        out.append("g hinge_fold")
+        out += [f"l {int(a) + 1} {int(b) + 1}" for a, b in creases]
+    write(name, "\n".join(out) + "\n")
+
+
+def bh_examples():
+    import sys
+
+    sys.path.insert(0, os.path.dirname(HERE))
+    from bhweb.shapes import kresling, strip
+
+    X, F = strip(10.0, 1.0, 60, tri=True, alt=True)
+    _bh_obj("bh_strip.obj", "Woodruff 2020 strip L=10 W=1 a=6", X, F)
+    edges = sorted({(min(f[i], f[(i + 1) % 3]), max(f[i], f[(i + 1) % 3])) for f in F for i in range(3)})
+    inner = [e for e in edges if sum(1 for f in F if e[0] in f and e[1] in f) == 2]
+    PRESETS["bh_strip"]["ops"].insert(1, {"op": "set_crease", "edges": [list(e) for e in inner], "type": "bend"})
+    _bh_obj("bh_simple_fold.obj", "Tang 2026 simple fold", [(0, 0, 0), (10, 0, 0), (5, 5, 0), (5, -5, 0)], [[0, 1, 2], [1, 0, 3]], [(0, 1)])
+    X, F, mo, va, b, t = kresling()
+    _bh_obj("bh_kresling.obj", "Tang 2026 Kresling a=1 h0=1 phi=11pi/18", X, F, mo + va)
+    al = (55, 55, 70, 70)
+    nx, ny, a, bb = 4, 3, 0.8, 1.0
+    V = []
+    for j in range(ny + 1):
+        d = a / math.tan(math.radians(al[j]))
+        for i in range(nx + 1):
+            V.append((i * a, j * bb + (d if i % 2 else 0.0), 0.0))
+    idx = lambda i, j: j * (nx + 1) + i
+    Fq = [[idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j + 1)] for j in range(ny) for i in range(nx)]
+    cr = [(idx(i, j), idx(i + 1, j)) for j in range(1, ny) for i in range(nx)] + [(idx(i, j), idx(i, j + 1)) for i in range(1, nx) for j in range(ny)]
+    _bh_obj("bh_flat_miura.obj", "Filipov 2017 flat Miura 4x3, alpha 55/70", V, Fq, cr)
+    X = [(0, 0, 0), (30, 0, 0), (60, 0, 0), (90, 0, 0), (0, 30, 0), (30, 30, 0), (60, 30, 0), (90, 30, 0)]
+    Fq = [[0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6]]
+    _bh_obj("bh_roll.obj", "three panels rolled up with contact", X, Fq, [(1, 5), (2, 6)])
+
+
 PRESETS = {
     "cantilever_beam": {
         "title": "1. 직사각 단면 캔틸레버 빔 (보 요소)",
@@ -411,6 +451,100 @@ PRESETS = {
             {"op": "add_load", "type": "force", "name": "축 압축", "vector": [0, 0, -100000], "select": {"plane": {"axis": "z", "at": "max"}}},
         ],
     },
+    "bh_strip": {
+        "title": "B1. [BH-web] 얇은 띠 4점 굽힘 (Woodruff 2020, 그림 5c)",
+        "file": "bh_strip.obj",
+        "note": "L=10, W=1, t=0.1, E=1000, ν=0, 교대 대각선 삼각형 a=6. 보 이론 에너지 6EIδ²/(s²(3L-4s)) 대비 논문 약 1.03, BH-web 1.030",
+        "prompts": [],
+        "ops": [
+            {"op": "set_solver", "solver": "bh"},
+            {"op": "set_section", "group": "*", "thickness": 0.1},
+            {"op": "set_material", "name": "default", "E": 1000, "nu": 0.0, "rho": 1e-9},
+            {"op": "add_bc", "name": "양 끝 z 지지", "dofs": [3], "select": {"or": [{"plane": {"axis": "x", "at": "min"}}, {"plane": {"axis": "x", "at": "max"}}]}},
+            {"op": "add_bc", "name": "강체 이동 방지", "dofs": [1, 2], "select": {"nearest": [0, 0, 0]}},
+            {"op": "add_bc", "name": "강체 회전 방지", "dofs": [1], "select": {"nearest": [0, 1, 0]}},
+            {"op": "add_bc", "name": "강체 회전 방지 y", "dofs": [2], "select": {"nearest": [10, 0, 0]}},
+            {"op": "add_bc", "name": "하중점 강제 변위", "dofs": [3], "value": -0.0005, "select": {"or": [{"plane": {"axis": "x", "at": 0.1666667, "tol": 1e-4}}, {"plane": {"axis": "x", "at": 9.8333333, "tol": 1e-4}}]}},
+            {"op": "set_step", "type": "static", "nlgeom": True, "increments": 1},
+        ],
+    },
+    "bh_simple_fold": {
+        "title": "B2. [BH-web] 단일 주름 탄소성 접힘 (Tang 2026, 그림 4)",
+        "file": "bh_simple_fold.obj",
+        "note": "직각 이등변 삼각형 2장, 주름 AB=10. k=1 N·mm/rad/mm, 항복 0.2 N·mm/mm, H=0.5. 이론: 0.2 rad 에서 항복, 뒤 기울기 kH/(k+H)",
+        "prompts": [],
+        "ops": [
+            {"op": "set_solver", "solver": "bh"},
+            {"op": "set_section", "group": "*", "thickness": 0.5},
+            {"op": "set_material", "name": "default", "E": 67000, "nu": 0.33, "rho": 2.7e-9},
+            {"op": "set_bh", "fold_mode": "value", "fold_k": 1.0, "fold_yield": 0.2, "fold_H": 0.5, "watch": ["0-1"]},
+            {"op": "add_bc", "name": "고정 패널 ABC", "dofs": [1, 2, 3], "select": {"plane": {"axis": "y", "at": "max", "tol": 5.01}}},
+            {"op": "add_bc", "name": "D x 구속", "dofs": [1], "select": {"nearest": [5, -5, 0]}},
+            {"op": "add_bc", "name": "D 들어올림", "dofs": [3], "value": 4.0, "select": {"nearest": [5, -5, 0]}},
+            {"op": "set_step", "type": "static", "nlgeom": True, "increments": 40},
+            {"op": "add_plot", "title": "주름 AB 모멘트-이면각", "x": {"quantity": "fold.e0-1"}, "series": [{"quantity": "moment.e0-1"}]},
+        ],
+    },
+    "bh_kresling": {
+        "title": "B3. [BH-web] 크레슬링 반복 압축 히스테리시스 (Tang 2026, 그림 12)",
+        "file": "bh_kresling.obj",
+        "note": "육각 a=1, h0=1, 회전 11π/18. E=1e4, A=0.01, 바 항복 200·H 1e3, 접힘 k=0.2·항복 0.02·H 0.1. 위면 z -0.6 왕복 3회. 루프 면적이 회마다 줄어드는 소성 셰이크다운",
+        "prompts": [],
+        "ops": [
+            {"op": "set_solver", "solver": "bh"},
+            {"op": "set_section", "group": "*", "thickness": 0.01},
+            {"op": "set_material", "name": "default", "E": 10000, "nu": 0.3, "rho": 1e-9},
+            {"op": "set_bh", "fold_mode": "value", "fold_k": 0.2, "bar_area": 0.01, "bar_yield": 200, "bar_H": 1000, "fold_yield": 0.02, "fold_H": 0.1, "cycles": 3},
+            {"op": "add_bc", "type": "pinned", "name": "아래 육각 고정", "select": {"plane": {"axis": "z", "at": "min"}}},
+            {"op": "add_bc", "name": "위 육각 압축", "dofs": [3], "value": -0.6, "select": {"plane": {"axis": "z", "at": "max"}}},
+            {"op": "set_step", "type": "static", "nlgeom": True, "increments": 100},
+            {"op": "add_plot", "title": "힘-변위 히스테리시스", "x": {"quantity": "u.control"}, "series": [{"quantity": "reaction.z"}]},
+            {"op": "add_plot", "title": "에너지", "x": {"quantity": "time"}, "series": [{"quantity": "energy.external"}, {"quantity": "energy.total"}, {"quantity": "energy.plastic"}]},
+        ],
+    },
+    "bh_flat_miura": {
+        "title": "B4. [BH-web] 평면 미우라 강성 고유모드 (Filipov 2017, 그림 11)",
+        "file": "bh_flat_miura.obj",
+        "note": "4x3 패널, 위 α=70°, 아래 α=55°, E=1e6, ν=1/3, t=0.01, L*=1e4, Kv=λv 자유-자유. 논문: 7~11번 접힘 모드(λ 6.7e-6~1.3e-4) 뒤 12번 휨(0.139)",
+        "prompts": [],
+        "ops": [
+            {"op": "set_solver", "solver": "bh"},
+            {"op": "set_section", "group": "*", "thickness": 0.01},
+            {"op": "set_material", "name": "default", "E": 1000000, "nu": 0.3333333, "rho": 1e-9},
+            {"op": "set_bh", "Lstar": 10000, "use_mass": False},
+            {"op": "set_step", "type": "modal", "modes": 8},
+        ],
+    },
+    "bh_roll": {
+        "title": "B5. [BH-web] 패널 3장 말아 접기 기하 접촉",
+        "file": "bh_roll.obj",
+        "note": "30x30 패널 3장, 두 주름의 목표 이면각 30°(삼각 관을 넘어 말리는 각). 접촉을 켜면 세 번째 패널이 첫 패널에 닿아 멈추고 관통 없음",
+        "prompts": [],
+        "ops": [
+            {"op": "set_solver", "solver": "bh"},
+            {"op": "set_section", "group": "*", "thickness": 0.5},
+            {"op": "set_material", "name": "default", "E": 3000, "nu": 0.3, "rho": 1.2e-9},
+            {"op": "set_bh", "contact": True, "rest": {"1-5": 30.0, "2-6": 30.0}},
+            {"op": "add_bc", "type": "pinned", "name": "첫 패널 고정", "select": {"plane": {"axis": "x", "at": "min"}}},
+            {"op": "add_bc", "type": "pinned", "name": "첫 주름 고정", "select": {"box": {"min": [29.9, -1, -1], "max": [30.1, 31, 1]}}},
+            {"op": "set_step", "type": "static", "nlgeom": True, "increments": 40},
+            {"op": "add_plot", "title": "에너지", "x": {"quantity": "time"}, "series": [{"quantity": "energy.fold"}, {"quantity": "energy.contact"}, {"quantity": "energy.stretch"}]},
+        ],
+    },
+    "bh_miura": {
+        "title": "B6. [BH-web] 미우라 강체 접힘 기구 해석 · 3D 해공간",
+        "file": "miura.obj",
+        "note": "4x4 미우라, 패널 강체 가정. 기구 자유도 1, 접힘 경로에서 tan(ρ곧은/2)/tan(ρ지그재그/2) = cos γ",
+        "prompts": [],
+        "ops": [
+            {"op": "set_solver", "solver": "bh"},
+            {"op": "set_section", "group": "*", "thickness": 0.5},
+            {"op": "set_material", "name": "default", "E": 3000, "nu": 0.3, "rho": 1.2e-9},
+            {"op": "set_bh", "plot3": ["1-6", "5-6", "6-7"], "watch": ["1-6", "5-6"]},
+            {"op": "set_step", "type": "kinematic", "increments": 60},
+            {"op": "add_plot", "title": "주름 이면각", "x": {"quantity": "time"}, "series": [{"quantity": "fold.e1-6"}, {"quantity": "fold.e5-6"}, {"quantity": "fold.e6-7"}]},
+        ],
+    },
 }
 
 if __name__ == "__main__":
@@ -424,5 +558,6 @@ if __name__ == "__main__":
     cantilever_solid()
     cylinder_solid()
     two_blocks()
+    bh_examples()
     write("presets.json", json.dumps(PRESETS, ensure_ascii=False, indent=1) + "\n")
     print("ok")

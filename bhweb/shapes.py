@@ -19,12 +19,17 @@ def miura(a=50.0, b=50.0, gamma=60.0, theta=60.0, nx=4, ny=4):
     return np.array(X), F, cx, cy
 
 
-def strip(L=100.0, W=10.0, n=10, tri=False):
+def strip(L=100.0, W=10.0, n=10, tri=False, alt=False):
     X = [(L * i / n, y, 0.0) for y in (0.0, W) for i in range(n + 1)]
     F = []
     for i in range(n):
         a, b, c, d = i, i + 1, n + 2 + i, n + 1 + i
-        F += [[a, b, c], [a, c, d]] if tri else [[a, b, c, d]]
+        if not tri:
+            F.append([a, b, c, d])
+        elif alt and i % 2:
+            F += [[a, b, d], [b, c, d]]
+        else:
+            F += [[a, b, c], [a, c, d]]
     return np.array(X), F
 
 
@@ -37,3 +42,21 @@ def grid(Lx, Ly, nx, ny, tri=False):
             a, b, c, d = idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j + 1)
             F += [[a, b, c], [a, c, d]] if tri else [[a, b, c, d]]
     return np.array(X), F
+
+
+def kresling(n=6, a=1.0, h=1.0, phi=11 * math.pi / 18):
+    R = a / (2 * math.sin(math.pi / n))
+    X = [(R * math.cos(2 * math.pi * i / n), R * math.sin(2 * math.pi * i / n), 0.0) for i in range(n)]
+    X += [(R * math.cos(2 * math.pi * i / n + phi), R * math.sin(2 * math.pi * i / n + phi), h) for i in range(n)]
+    F = []
+    mountain = []
+    valley = []
+    for i in range(n):
+        b0, b1 = i, (i + 1) % n
+        t0, t1 = n + i, n + (i + 1) % n
+        F += [[b0, b1, t0], [b1, t1, t0]]
+        valley.append((min(b1, t0), max(b1, t0)))
+        mountain.append((min(b0, t0), max(b0, t0)))
+    top = list(range(n, 2 * n))
+    bottom = list(range(n))
+    return np.array(X), F, mountain, valley, bottom, top

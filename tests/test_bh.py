@@ -196,3 +196,57 @@ def test_set_crease_ops_and_validation():
     c.post("/api/ops", json={"ops": [{"op": "set_crease", "edges": [e], "type": "auto"}]})
     cr3 = {tuple(x["edge"]): x["type"] for x in c.get("/api/creases").json()["edges"]}
     assert cr3[tuple(e)] == "fold"
+
+
+def test_woodruff_strip_benchmarks():
+    from bhweb.benchmarks import strip_case
+
+    assert abs(strip_case("tension", 4) - 1) < 1e-3
+    assert abs(strip_case("bending", 6) - 1) < 0.05
+    assert abs(strip_case("inplane", 6) - 3) < 0.1
+
+
+def test_filipov_flat_miura_five_fold_modes():
+    r = c.post("/api/examples/bh_flat_miura")
+    assert r.status_code == 200
+    assert c.post("/api/solve").status_code == 200
+    res = c.get("/api/state").json()["result"]
+    assert res["summary"]["강체 접힘 기구 수 (패널 강체 가정)"] == 5
+    from femweb.solvers import bh
+
+    m = bh.build(server.S["base"], server.S["spec"])
+    r = modal(m, n=14, use_mass=False)
+    lam = np.sort(r["eig"])[6:12]
+    assert lam[4] < 1e-3 and lam[5] > 100 * lam[4]
+
+
+def test_kresling_cyclic_shakedown():
+    from bhweb.shapes import kresling
+
+    X, F, mo, va, b, t = kresling()
+    p = {"E": 1e4, "bar_area": 0.01, "fold_mode": "value", "fold_k": 0.2, "bar_yield": 200, "bar_H": 1e3, "fold_yield": 0.02, "fold_H": 0.1}
+    m = BHModel(X, F, crease_edges=mo + va, params=p)
+    fixed = [3 * i + q for i in b for q in range(3)]
+    cyc = 3
+    tri = lambda s: 1 - abs(1 - 2 * (s % 1.0))
+    path = ([3 * i + 2 for i in t], lambda lam: [-0.6 * tri(lam * cyc)] * len(t))
+    rec = solve_displacement(m, Problem(m, fixed=fixed, path=path), steps=200 * cyc)
+    u = np.array([U[3 * t[0] + 2] for U in rec.U])
+    f = np.array([sum(R[3 * i + 2] for i in t) for R in rec.react])
+    lam = np.array(rec.lam)
+    loops = []
+    for k in range(cyc):
+        s = (lam >= k / cyc - 1e-12) & (lam <= (k + 1) / cyc + 1e-12)
+        loops.append(np.trapezoid(f[s], u[s]))
+    assert loops[0] > 5 * loops[1] > 25 * loops[2] > 0
+    E = rec.E[-1]
+    assert abs(sum(E.values()) - rec.extwork[-1]) < 0.03 * rec.extwork[-1]
+
+
+def test_roll_contact_jams_without_penetration():
+    pytest.importorskip("ipctk")
+    assert c.post("/api/examples/bh_roll").status_code == 200
+    assert c.post("/api/solve").status_code == 200
+    s = c.get("/api/state").json()["result"]["summary"]
+    assert s["관통 검사"] == "없음"
+    assert s["접촉 (쌍 / 힌지 / 최소 거리)"][0] >= 1

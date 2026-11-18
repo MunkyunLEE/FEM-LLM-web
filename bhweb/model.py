@@ -24,6 +24,7 @@ DEFAULTS = {
     "bend_yield": INF,
     "bend_H": 0.0,
     "bend_rest": "asis",
+    "tri_bars": "woodruff",
 }
 
 FOLD, PANEL, BEND = 0, 1, 2
@@ -231,11 +232,18 @@ class BHModel:
                 area[fi] = S
                 per = sum(np.linalg.norm(P[i] - P[(i + 1) % 3]) for i in range(3))
                 widths.append(per / 3.0)
-                A = 2 * S * t / ((1 - nu) * per)
+                Ls = [float(np.linalg.norm(P[(i + 1) % 3] - P[i])) for i in range(3)]
+                if p.get("tri_bars") == "merlin2":
+                    As = [2 * S * t / ((1 - nu) * per)] * 3
+                else:
+                    jd = int(np.argmax(Ls))
+                    o = [Ls[q] for q in range(3) if q != jd]
+                    ar = max(o) / max(min(o), 1e-12)
+                    As = [S * t / Ls[i] * ((ar * ar / 2 + 1.25) if i == jd else 1.0) for i in range(3)]
                 for i in range(3):
                     a, b = f[i], f[(i + 1) % 3]
                     k = (min(a, b), max(a, b))
-                    bar[k] = bar.get(k, 0.0) + A
+                    bar[k] = bar.get(k, 0.0) + As[i]
                     wing[(fi, k)] = f[(i + 2) % 3]
                 mass[f] += rho * t * S / 3.0
                 tris.append(tuple(f))
