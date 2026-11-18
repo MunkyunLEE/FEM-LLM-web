@@ -33,7 +33,7 @@ def modal(m, x=None, state=None, fixed=None, n=12, use_mass=True):
     shapes[:, free] = v[:, :k].T
     mx = np.abs(shapes).max(axis=1, keepdims=True)
     shapes = shapes / np.where(mx > 0, mx, 1.0)
-    rigid = int((np.abs(lam) < 1e-8 * max(np.abs(lam).max(), 1e-30)).sum())
+    rigid = int((np.abs(lam) < 1e-12 * max(np.abs(lam).max(), 1e-30)).sum())
     out = {"eig": lam[:k], "shapes": shapes.reshape(k, -1, 3), "rigid": rigid, "use_mass": use_mass}
     if use_mass:
         out["freq"] = np.sqrt(np.clip(lam[:k], 0, None)) / (2 * np.pi)
@@ -113,6 +113,7 @@ def rigid_fold_path(m, drivers, targets, steps=100, fixed=None, x0=None, tol=1e-
     xs = [x.copy()]
     err = []
     ref = path[0].copy()
+    tol = tol * max(1.0, float(np.mean(m.L0)))
     for s in range(1, steps + 1):
         goal = th_start + (targets - th_start) * s / steps
         _, J = _constraints(m, x)
@@ -124,13 +125,16 @@ def rigid_fold_path(m, drivers, targets, steps=100, fixed=None, x0=None, tol=1e-
         xv = x.ravel().copy()
         xv[free] += v
         x = xv.reshape(-1, 3)
+        rprev = np.inf
         for _ in range(itmax):
             g, J = _constraints(m, x)
             A = _fold_grads(m, x, drivers)
             cur = fold_angles(m, x, ref)[drivers]
             r = np.concatenate([g, cur - goal])
-            if np.abs(r).max() < tol:
+            rn = np.abs(r).max()
+            if rn < tol or (_ > 1 and rn < 1e3 * tol and rn > 0.5 * rprev):
                 break
+            rprev = rn
             M = np.vstack([J[:, free], A[:, free]])
             dx = np.linalg.lstsq(M, -r, rcond=None)[0]
             xv = x.ravel().copy()

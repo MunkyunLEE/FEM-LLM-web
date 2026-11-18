@@ -21,8 +21,8 @@
     </section>
     <section>
       <h2>솔버 · 스텝</h2>
-      <div class="row"><select id="solver"><option value="calculix">CalculiX (바·쉘 FEM)</option><option value="barhinge">바-힌지 (간이 검토)</option><option value="tensormesh">TensorMesh (솔리드)</option><option value="shell">자체 쉘 (대변형·자기 접촉·감쇠)</option></select></div>
-      <div class="row two"><label>해석 종류<select id="stepType"><option value="static">정적</option><option value="buckle">좌굴</option><option value="modal">모달</option><option value="arclength">호장법</option></select></label><label class="check"><input type="checkbox" id="nlgeom">기하비선형</label></div>
+      <div class="row"><select id="solver"><option value="calculix">CalculiX (바·쉘 FEM)</option><option value="barhinge">바-힌지 (간이 검토)</option><option value="tensormesh">TensorMesh (솔리드)</option><option value="shell">자체 쉘 (대변형·자기 접촉·감쇠)</option><option value="bh">BH-web 바-힌지 (오리가미)</option></select></div>
+      <div class="row two"><label>해석 종류<select id="stepType"><option value="static">정적</option><option value="buckle">좌굴</option><option value="modal">모달</option><option value="arclength">호장법</option><option value="kinematic">기구 (강체 접힘)</option></select></label><label class="check"><input type="checkbox" id="nlgeom">기하비선형</label></div>
       <div class="row three"><label>증분<input id="increments" type="number" min="1" value="25"></label><label>모드 수<input id="modes" type="number" min="1" value="5"></label><label>초기결함<input id="imperfection" type="number" step="any" value="0"></label></div>
       <div class="row two"><label>제어 방식<select id="control"><option value="load">하중 제어</option><option value="displacement">변위 제어</option></select></label><label>목표 변위 (mm)<input id="controlDisp" type="number" step="any" min="0" value="0" title="0이면 모델 크기의 5%"></label></div>
       <div class="row two"><label>변위 제어 방법<select id="controlKind"><option value="average">하중 분포 유지</option><option value="rigid">강체 압판</option></select></label><label class="check" title="바-힌지: 완전한 형상에서 분기점을 만나면 좌굴 가지로 전환"><input type="checkbox" id="branch">분기 전환</label></div>
@@ -38,6 +38,19 @@
       <div class="row two"><label>힌지 κ (N·mm/rad/mm)<input id="hingeK" type="number" step="any" placeholder="자동"></label><label>자동 비율 κ=r·D/L<input id="hingeR" type="number" step="any"></label></div>
       <div class="row two"><label>쉘 공유 엣지 힌지<select id="hingeAuto"><option value="off">끔 (OBJ의 hinge_ 선만)</option><option value="auto">자동 (그룹 경계 + 꺾인 엣지)</option><option value="groups">그룹 경계</option><option value="crease">꺾인 엣지</option><option value="all">모든 내부 엣지</option></select></label><label class="check"><input type="checkbox" id="hingePin">핀 조인트 (회전 자유)</label></div>
       <div id="hingeInfo" class="info"></div>
+    </section>
+    <section id="bhPanel" hidden>
+      <h2>BH-web 바-힌지 <small id="bhCount"></small></h2>
+      <div class="row three"><label title="자동: E, ν, t, L* 로 접힘 강성 계산. 퍼센트: 패널 굽힘강성 B=Et³/12(1-ν²) 대비 %. 값: N·mm/rad/mm 직접 지정">접힘 강성<select id="bhFoldMode"><option value="auto">자동 (수식)</option><option value="percent">패널 B 대비 %</option><option value="value">직접 값</option></select></label><label title="자동일 때 L*/w̄ (평균 패널 폭 배수). L* 를 직접 넣으면 그 값을 씀">L* / w̄<input id="bhLratio" type="number" step="any" min="0"></label><label id="bhPctBox">% 또는 값<input id="bhPct" type="number" step="any" min="0"></label></div>
+      <div class="row three"><label title="바 항복 응력 (MPa). 비우면 탄성">바 항복<input id="bhBarY" type="number" step="any" min="0" placeholder="탄성"></label><label title="바 경화 계수 (MPa)">바 H<input id="bhBarH" type="number" step="any" min="0" placeholder="0"></label><label title="판정 각도 (도): 이보다 꺾인 공유 엣지를 접힘으로">자동 판정각<input id="bhTol" type="number" step="any" min="0"></label></div>
+      <div class="row three"><label title="접힘 힌지 항복 모멘트 (N·mm/mm, 길이당). 비우면 탄성">접힘 항복<input id="bhFoldY" type="number" step="any" min="0" placeholder="탄성"></label><label title="접힘 힌지 경화 (N·mm/rad/mm)">접힘 H<input id="bhFoldH" type="number" step="any" min="0" placeholder="0"></label><label title="패널 휨 힌지 항복 (N·mm/mm)">휨 항복<input id="bhBendY" type="number" step="any" min="0" placeholder="탄성"></label></div>
+      <div class="row three"><label class="check" title="기하 접촉: 면끼리 관통 방지 (IPC 장벽 + 연속 충돌 검사). 마찰·감쇠 없음"><input type="checkbox" id="bhContact">기하 접촉</label><label title="비우면 평균 바 길이의 0.1%">접촉 간격 (mm)<input id="bhGap" type="number" step="any" min="0" placeholder="자동"></label><label title="휨 힌지 경화 (N·mm/rad/mm)">휨 H<input id="bhBendH" type="number" step="any" min="0" placeholder="0"></label></div>
+      <div class="row"><button id="bhEdit" type="button" title="켜면 마우스 왼쪽 드래그가 상자 선택이 됩니다. 왼→오: 완전히 들어간 엣지, 오→왼: 걸친 엣지. Shift 추가, Ctrl 제외, Esc 해제, 클릭은 한 개">주름 편집 모드 끔</button></div>
+      <div class="row four"><button class="bhType" data-t="fold" type="button">접힘</button><button class="bhType" data-t="bend" type="button">휨</button><button class="bhType" data-t="cut" type="button">자름</button><button class="bhType" data-t="auto" type="button">자동</button></div>
+      <div class="row three"><button id="bhDrivers" type="button" title="선택한 주름을 기구 해석의 구동 주름으로">구동 주름 지정</button><label title="구동 주름의 목표 이면각 (도, 평면 = 180). 여러 개면 쉼표">목표 이면각<input id="bhTargets" type="text" placeholder="예: 60"></label><button id="bhClearDrv" class="ghost" type="button">구동 해제</button></div>
+      <div class="row two"><button id="bhPlot3" type="button" title="선택한 접힘 주름 3개의 회전각으로 기구 해석 해공간 3D 그래프">3D 해공간 주름 (3개)</button><button id="bhWatch" type="button" title="선택한 주름의 각도·모멘트 이력을 결과에 기록">이력 기록 주름</button></div>
+      <div id="bhSel" class="info"></div>
+      <div class="legend" id="bhLegend"><span style="color:#ff6b5e">━ 접힘</span> <span style="color:#5ec8ff">━ 휨</span> <span style="color:#ffd84a">━ 자름</span> <span style="color:#7d8a99">━ 경계</span> <span style="color:#ffffff">━ 선택</span></div>
     </section>
     <section>
       <h2>구속 <small id="bcCount"></small></h2>

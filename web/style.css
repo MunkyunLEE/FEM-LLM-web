@@ -121,3 +121,11 @@ button.danger:hover{background:#7a2c3d}
 .plot label.mini{display:inline-block;margin-top:6px;cursor:pointer}
 #hud .pickinfo{color:var(--text);line-height:1.5;font-variant-numeric:tabular-nums}
 #hud .pickinfo div:first-child{font-weight:600;color:#ffc857}
+.row.four{grid-template-columns:1fr 1fr 1fr 1fr}
+#bhLegend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px}
+#bhEdit.on{background:var(--accent,#3a7bd5);color:#fff}
+#selBox{position:fixed;border:1px dashed #fff;pointer-events:none;z-index:30;display:none}
+#selBox.cross{border-color:#7fe07f;background:rgba(127,224,127,.08)}
+#selBox.win{border-color:#7fb8ff;background:rgba(127,184,255,.08)}
+.kin3d{width:440px}
+.kin3d canvas{width:100%;height:320px;display:block;border-radius:6px;background:#111821}

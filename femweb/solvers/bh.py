@@ -202,7 +202,9 @@ def solve(model, spec, progress=None):
     if kind == "modal":
         return _modal(m, allfix, int(st.get("modes", 12)), msgs)
     if kind == "kinematic":
-        return _kinematic(m, allfix, c, int(st.get("increments", 60)), msgs)
+        if disp:
+            msgs.append(f"기구 해석은 구동 주름 각도로 움직이므로 0 이 아닌 지정 변위 {len(disp)}개 자유도는 쓰지 않았습니다 (0 구속만 사용)")
+        return _kinematic(m, sorted(set(fixed)), c, int(st.get("increments", 60)), msgs)
     cb = (lambda lam, k: progress(lam)) if progress else None
     ct = GeometricContact(m, gap=c["gap"]) if c["contact"] else None
     if ct is not None:
@@ -349,7 +351,7 @@ def _kinematic(m, fixed, c, steps, msgs):
         msgs.append(f"기구 자유도 {da['mechanisms']} 보다 구동 주름이 적어 최소 노름 해로 나머지를 정했습니다")
     p = rigid_fold_path(m, drv, tg, steps=steps, fixed=fixed or None)
     res = _base(m, "static")
-    hist = {"time": [], "constraint.error": []}
+    hist = {"time": [], "constraint.error": [], "energy.fold": [], "energy.total": []}
     for i in fi:
         hist[f"fold.e{ekey(m.hedge[i])}"] = []
     n = len(p["x"])
@@ -358,6 +360,9 @@ def _kinematic(m, fixed, c, steps, msgs):
         res.add_frame(f"단계 {k}/{n - 1}", k / max(n - 1, 1), x - m.X, _frame_fields(m, x, None))
         hist["time"].append(k / max(n - 1, 1))
         hist["constraint.error"].append(float(p["err"][k - 1]) if k else 0.0)
+        ef = float(0.5 * np.sum(m.hk[fi] * (p["angles"][k][fi] - m.th0[fi]) ** 2))
+        hist["energy.fold"].append(ef)
+        hist["energy.total"].append(ef)
         for i in fi:
             hist[f"fold.e{ekey(m.hedge[i])}"].append(float(np.degrees(p["angles"][k][i])))
     res.history = hist

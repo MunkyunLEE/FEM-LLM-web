@@ -55,8 +55,9 @@ scene.add(sun);
 const fill = new THREE.DirectionalLight(0xbcd4ff, 0.7);
 scene.add(fill);
 const surfaceMat = (extra) => new THREE.MeshStandardMaterial({ roughness: 0.62, metalness: 0.08, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, ...extra });
-const G = { model: new THREE.Group(), edges: new THREE.Group(), symbols: new THREE.Group(), result: new THREE.Group(), pick: new THREE.Group(), rigid: new THREE.Group() };
+const G = { model: new THREE.Group(), edges: new THREE.Group(), symbols: new THREE.Group(), result: new THREE.Group(), pick: new THREE.Group(), rigid: new THREE.Group(), crease: new THREE.Group() };
 Object.values(G).forEach((g) => scene.add(g));
+G.crease.renderOrder = 2;
 let diag = 100;
 let center = new THREE.Vector3();
 
@@ -626,6 +627,7 @@ function applyVisibility() {
   });
   $('thickWrap').hidden = !R.thick;
   $('meshLinesWrap').hidden = !R.mesh;
+  G.crease.visible = !!st && !!st.spec && st.spec.solver === 'bh' && (!res || BH.edit);
 }
 
 function describeBC(b) {
@@ -909,6 +911,7 @@ function renderControls() {
   $('hingeAuto').disabled = st.model.kind !== 'obj';
   $('hingeInfo').textContent = hg.groups.length ? '힌지: ' + hg.groups.map((g) => `${g.name} ${g.edges}개 엣지 · ${g.length} mm${g.pin ? ' · 핀' : ''}`).join(' / ') : st.model.kind === 'obj' && st.model.counts.shells ? '지정된 힌지 없음 (쉘 이음은 강접, 바-힌지는 모든 내부 엣지가 접힘선)' : '';
   $('undo').disabled = !st.can_undo;
+  renderBH();
 }
 
 function renderSummary() {
@@ -1084,6 +1087,7 @@ async function refresh(s, opt = {}) {
       center = b.getCenter(new THREE.Vector3());
     }
   }
+  await loadCreases();
   renderLists();
   buildSymbols();
   renderSummary();
@@ -1091,6 +1095,7 @@ async function refresh(s, opt = {}) {
   if (!st.result || !opt.keepResult || !hadResult) await loadResult();
   applyVisibility();
   await loadPlots();
+  await loadKin3d();
 }
 
 function addMsg(role, text, extra) {
@@ -1622,17 +1627,373 @@ function bind() {
       sendChat($('chatInput').value);
     }
   };
+  bindBH();
   $('llmSave').onclick = () => llmRefresh(true).catch((e) => note(e.message, true));
   let down = null;
   canvas.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY, e.button]));
   canvas.addEventListener('pointerup', (e) => {
     if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 4) {
       if (down[2] === 2) pickInfo(e);
-      else if (down[2] === 0) pickNode(e);
+      else if (down[2] === 0 && !BH.edit) pickNode(e);
     }
     down = null;
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+const BH = { edges: [], note: '', sel: new Set(), edit: false, drag: null, k3: null };
+const BH_COL = { fold: 0xff6b5e, bend: 0x5ec8ff, cut: 0xffd84a, boundary: 0x7d8a99 };
+const BH_NAME = { fold: '접힘', bend: '휨', cut: '자름', boundary: '경계' };
+const ekey = (e) => (e[0] < e[1] ? `${e[0]}-${e[1]}` : `${e[1]}-${e[0]}`);
+
+async function loadCreases() {
+  const on = !!st && !!st.spec && st.spec.solver === 'bh' && !!st.model && !!st.model.counts.shells;
+  if (!on) {
+    BH.edges = [];
+    clear(G.crease);
+    return;
+  }
+  try {
+    const r = await api('/api/creases');
+    BH.edges = r.edges || [];
+    BH.note = r.note || '';
+  } catch (e) {
+    BH.edges = [];
+    BH.note = e.message;
+  }
+  const known = new Set(BH.edges.map((c) => ekey(c.edge)));
+  for (const k of [...BH.sel]) if (!known.has(k)) BH.sel.delete(k);
+  drawCreases();
+  renderBH();
+}
+
+function drawCreases() {
+  clear(G.crease);
+  if (!BH.edges.length || !st.view) return;
+  const groups = {};
+  for (const c of BH.edges) {
+    const t = BH.sel.has(ekey(c.edge)) ? 'sel' : c.type;
+    (groups[t] = groups[t] || []).push(...st.view.nodes[c.edge[0]], ...st.view.nodes[c.edge[1]]);
+  }
+  for (const [t, arr] of Object.entries(groups)) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(arr), 3));
+    const m = new THREE.LineBasicMaterial({ color: t === 'sel' ? 0xffffff : BH_COL[t], depthTest: t !== 'boundary', transparent: true, opacity: t === 'boundary' ? 0.6 : 1 });
+    const ls = new THREE.LineSegments(g, m);
+    ls.renderOrder = t === 'sel' ? 3 : 2;
+    G.crease.add(ls);
+  }
+  applyVisibility();
+}
+
+function renderBH() {
+  const on = !!st && !!st.spec && st.spec.solver === 'bh';
+  $('bhPanel').hidden = !on;
+  if (!on) {
+    if (BH.edit) setEdit(false);
+    return;
+  }
+  const c = st.spec.bh || {};
+  $('bhFoldMode').value = c.fold_mode || 'auto';
+  $('bhLratio').value = c.Lstar_ratio ?? 3;
+  const mode = c.fold_mode || 'auto';
+  $('bhPctBox').firstChild.textContent = mode === 'value' ? 'k (N·mm/rad/mm)' : mode === 'percent' ? 'B 대비 %' : 'L* (mm)';
+  $('bhPct').value = (mode === 'value' ? c.fold_k : mode === 'percent' ? c.fold_percent ?? 10 : c.Lstar) ?? '';
+  $('bhLratio').disabled = mode !== 'auto';
+  $('bhBarY').value = c.bar_yield ?? '';
+  $('bhBarH').value = c.bar_H || '';
+  $('bhFoldY').value = c.fold_yield ?? '';
+  $('bhFoldH').value = c.fold_H || '';
+  $('bhBendY').value = c.bend_yield ?? '';
+  $('bhBendH').value = c.bend_H || '';
+  $('bhTol').value = c.tol ?? 3;
+  $('bhContact').checked = !!c.contact;
+  $('bhGap').value = c.gap ?? '';
+  $('bhGap').disabled = !c.contact;
+  if (document.activeElement !== $('bhTargets')) $('bhTargets').value = (c.targets || []).join(', ');
+  const cnt = {};
+  for (const e of BH.edges) cnt[e.type] = (cnt[e.type] || 0) + 1;
+  $('bhCount').textContent = Object.entries(cnt).map(([k, v]) => `${BH_NAME[k] || k} ${v}`).join(' · ');
+  const sel = [...BH.sel];
+  const lines = [];
+  lines.push(sel.length ? `선택 ${sel.length}개: ${sel.slice(0, 12).join(', ')}${sel.length > 12 ? ' …' : ''}` : BH.edit ? '드래그로 엣지를 고르세요 (왼→오 완전 포함, 오→왼 걸침, Shift 추가, Ctrl 제외, Esc 해제)' : '주름 편집 모드를 켜면 상자 선택으로 여러 엣지의 종류를 바꿀 수 있습니다');
+  const man = Object.keys(st.spec.creases || {}).length;
+  if (man) lines.push(`직접 지정 ${man}개`);
+  if ((c.drivers || []).length) lines.push(`구동: ${c.drivers.map((d, i) => `${d}${c.targets && c.targets[i] !== undefined ? ' → ' + c.targets[i] + '°' : ''}`).join(', ')}`);
+  if ((c.plot3 || []).length) lines.push(`3D 해공간: ${c.plot3.join(', ')}`);
+  if ((c.watch || []).length) lines.push(`이력: ${c.watch.join(', ')}`);
+  if (BH.note) lines.push(BH.note);
+  $('bhSel').textContent = lines.join('\n');
+  $('bhSel').style.whiteSpace = 'pre-line';
+}
+
+function setEdit(on) {
+  BH.edit = on;
+  $('bhEdit').textContent = on ? '주름 편집 모드 켬 (Esc 해제)' : '주름 편집 모드 끔';
+  $('bhEdit').classList.toggle('on', on);
+  controls.mouseButtons.LEFT = on ? null : THREE.MOUSE.ROTATE;
+  applyVisibility();
+  renderBH();
+}
+
+function screenEdges() {
+  const rect = canvas.getBoundingClientRect();
+  const q = new THREE.Vector3();
+  const pts = new Map();
+  const P = (i) => {
+    if (pts.has(i)) return pts.get(i);
+    const p = st.view.nodes[i];
+    q.set(p[0], p[1], p[2]).project(camera);
+    const r = q.z < -1 || q.z > 1 ? null : [(q.x * 0.5 + 0.5) * rect.width + rect.left, (-q.y * 0.5 + 0.5) * rect.height + rect.top];
+    pts.set(i, r);
+    return r;
+  };
+  return BH.edges.filter((c) => c.type !== 'boundary').map((c) => ({ key: ekey(c.edge), a: P(c.edge[0]), b: P(c.edge[1]) })).filter((s) => s.a && s.b);
+}
+
+function segHitsRect(a, b, x0, y0, x1, y1) {
+  let t0 = 0;
+  let t1 = 1;
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const p = [-dx, dx, -dy, dy];
+  const qq = [a[0] - x0, x1 - a[0], a[1] - y0, y1 - a[1]];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (qq[i] < 0) return false;
+    } else {
+      const r = qq[i] / p[i];
+      if (p[i] < 0) t0 = Math.max(t0, r);
+      else t1 = Math.min(t1, r);
+      if (t0 > t1) return false;
+    }
+  }
+  return true;
+}
+
+function segDist(a, b, x, y) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const L = dx * dx + dy * dy || 1e-12;
+  const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / L));
+  return Math.hypot(a[0] + t * dx - x, a[1] + t * dy - y);
+}
+
+function applySel(keys, ev) {
+  if (ev.ctrlKey || ev.metaKey) keys.forEach((k) => BH.sel.delete(k));
+  else {
+    if (!ev.shiftKey) BH.sel.clear();
+    keys.forEach((k) => BH.sel.add(k));
+  }
+  drawCreases();
+  renderBH();
+}
+
+function bhPointerDown(e) {
+  if (!BH.edit || e.button !== 0) return;
+  BH.drag = { x: e.clientX, y: e.clientY };
+}
+
+function bhPointerMove(e) {
+  if (!BH.drag) return;
+  const b = $('selBox');
+  const x0 = Math.min(BH.drag.x, e.clientX);
+  const y0 = Math.min(BH.drag.y, e.clientY);
+  if (Math.hypot(e.clientX - BH.drag.x, e.clientY - BH.drag.y) < 4) return;
+  b.style.display = 'block';
+  b.className = e.clientX >= BH.drag.x ? 'win' : 'cross';
+  b.style.left = x0 + 'px';
+  b.style.top = y0 + 'px';
+  b.style.width = Math.abs(e.clientX - BH.drag.x) + 'px';
+  b.style.height = Math.abs(e.clientY - BH.drag.y) + 'px';
+}
+
+function bhPointerUp(e) {
+  if (!BH.drag) return;
+  const d = BH.drag;
+  BH.drag = null;
+  $('selBox').style.display = 'none';
+  const segs = screenEdges();
+  if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) {
+    let best = null;
+    let bd = 8;
+    for (const s of segs) {
+      const dd = segDist(s.a, s.b, e.clientX, e.clientY);
+      if (dd < bd) {
+        bd = dd;
+        best = s.key;
+      }
+    }
+    applySel(best ? [best] : [], e);
+    return;
+  }
+  const x0 = Math.min(d.x, e.clientX);
+  const x1 = Math.max(d.x, e.clientX);
+  const y0 = Math.min(d.y, e.clientY);
+  const y1 = Math.max(d.y, e.clientY);
+  const inside = (p) => p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
+  const win = e.clientX >= d.x;
+  applySel(segs.filter((s) => (win ? inside(s.a) && inside(s.b) : segHitsRect(s.a, s.b, x0, y0, x1, y1))).map((s) => s.key), e);
+}
+
+function bhNum(v) {
+  const s = String(v).trim();
+  return s === '' ? null : +s;
+}
+
+function bindBH() {
+  const box = el('div');
+  box.id = 'selBox';
+  document.body.append(box);
+  canvas.addEventListener('pointerdown', bhPointerDown);
+  window.addEventListener('pointermove', bhPointerMove);
+  window.addEventListener('pointerup', bhPointerUp);
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && BH.edit && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+      if (BH.sel.size) applySel([], { shiftKey: false });
+      else setEdit(false);
+    }
+  });
+  $('bhEdit').onclick = () => setEdit(!BH.edit);
+  document.querySelectorAll('.bhType').forEach((b) => {
+    b.onclick = () => {
+      const es = [...BH.sel].map((k) => k.split('-').map(Number));
+      if (!es.length) return note('먼저 주름 편집 모드에서 엣지를 선택하세요', true);
+      ops([{ op: 'set_crease', edges: es, type: b.dataset.t }]);
+    };
+  });
+  const setbh = (o) => ops([{ op: 'set_bh', ...o }]);
+  $('bhFoldMode').onchange = (e) => setbh({ fold_mode: e.target.value });
+  $('bhLratio').onchange = (e) => setbh({ Lstar_ratio: bhNum(e.target.value) ?? 3 });
+  $('bhPct').onchange = (e) => {
+    const m = $('bhFoldMode').value;
+    const v = bhNum(e.target.value);
+    setbh(m === 'value' ? { fold_k: v } : m === 'percent' ? { fold_percent: v ?? 10 } : { Lstar: v });
+  };
+  const num = { bhBarY: 'bar_yield', bhBarH: 'bar_H', bhFoldY: 'fold_yield', bhFoldH: 'fold_H', bhBendY: 'bend_yield', bhBendH: 'bend_H', bhGap: 'gap', bhTol: 'tol' };
+  for (const [id, f] of Object.entries(num)) $(id).onchange = (e) => setbh({ [f]: bhNum(e.target.value) ?? (f.endsWith('_H') ? 0 : f === 'tol' ? 3 : null) });
+  $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
+  const selFolds = () => [...BH.sel].filter((k) => (BH.edges.find((c) => ekey(c.edge) === k) || {}).type === 'fold');
+  const targets = (n) => {
+    const t = $('bhTargets').value.split(/[,\s]+/).filter(Boolean).map(Number);
+    if (t.some((v) => !Number.isFinite(v))) return null;
+    if (t.length === 1 && n > 1) return Array(n).fill(t[0]);
+    return t;
+  };
+  $('bhDrivers').onclick = () => {
+    const d = selFolds();
+    if (!d.length) return note('구동 주름은 접힘(fold) 주름이어야 합니다', true);
+    const t = targets(d.length);
+    if (!t || t.length !== d.length) return note(`목표 이면각을 ${d.length}개 (또는 한 개) 넣어 주세요. 평면은 180°`, true);
+    setbh({ drivers: d, targets: t });
+  };
+  $('bhTargets').onchange = () => {
+    const c = st.spec.bh || {};
+    const n = (c.drivers || []).length;
+    const t = targets(n);
+    if (n && t && t.length === n) setbh({ targets: t });
+  };
+  $('bhClearDrv').onclick = () => setbh({ drivers: [], targets: [] });
+  $('bhPlot3').onclick = () => {
+    const d = selFolds();
+    if (d.length !== 3) return note(`접힘 주름을 정확히 3개 선택하세요 (지금 ${d.length}개)`, true);
+    setbh({ plot3: d });
+  };
+  $('bhWatch').onclick = () => {
+    const d = [...BH.sel];
+    setbh({ watch: d });
+  };
+}
+
+function textSprite(text, color) {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 64;
+  const g = c.getContext('2d');
+  g.font = '28px sans-serif';
+  g.fillStyle = color || '#dfe7f1';
+  g.textBaseline = 'middle';
+  g.fillText(text, 4, 32);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  sp.scale.set(0.7, 0.175, 1);
+  sp.center.set(0, 0.5);
+  return sp;
+}
+
+async function loadKin3d() {
+  if (BH.k3) {
+    BH.k3.stop = true;
+    BH.k3.renderer.dispose();
+    BH.k3 = null;
+  }
+  if (!st || !st.result || !st.spec || st.spec.solver !== 'bh' || st.spec.step.type !== 'kinematic') return;
+  let k;
+  try {
+    k = await api('/api/result/kin3d');
+  } catch (e) {
+    return;
+  }
+  if (!k || !k.edges) return;
+  const all = [...(k.paths || []).flat(), ...(k.main || [])];
+  if (!all.length) return;
+  const lo = [0, 1, 2].map((i) => Math.min(...all.map((p) => p[i])));
+  const hi = [0, 1, 2].map((i) => Math.max(...all.map((p) => p[i])));
+  const nrm = (p) => p.map((v, i) => (hi[i] - lo[i] > 1e-9 ? (v - lo[i]) / (hi[i] - lo[i]) : 0.5) - 0.5);
+  const d = el('div', 'plot kin3d');
+  const t = el('div', 'ptitle');
+  t.append(el('span', '', `기구 해공간 · 자유도 ${k.dof} · 이면각 (도)`));
+  d.append(t);
+  const cv = document.createElement('canvas');
+  d.append(cv);
+  const lg = el('div', 'legend');
+  lg.innerHTML = `<span><i style="background:#ff6b5e"></i>X ${k.edges[0]}</span><span><i style="background:#7fe07f"></i>Y ${k.edges[1]}</span><span><i style="background:#5ec8ff"></i>Z ${k.edges[2]}</span><span><i style="background:#ffd84a"></i>해석 경로</span><span><i style="background:#9fb3c8"></i>방향별 경로</span>`;
+  d.append(lg);
+  $('plots').append(d);
+  const w = cv.clientWidth || 420;
+  const h = 320;
+  const rd = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+  rd.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  rd.setSize(w, h, false);
+  const sc = new THREE.Scene();
+  const cam = new THREE.PerspectiveCamera(35, w / h, 0.01, 100);
+  cam.up.set(0, 0, 1);
+  cam.position.set(1.6, -2.0, 1.3);
+  const oc = new OrbitControls(cam, cv);
+  oc.enableDamping = true;
+  const axes = [[0xff6b5e, [1, 0, 0]], [0x7fe07f, [0, 1, 0]], [0x5ec8ff, [0, 0, 1]]];
+  axes.forEach(([col, a], i) => {
+    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(-0.5 + a[0], -0.5 + a[1], -0.5 + a[2])]);
+    sc.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: col })));
+    const s0 = textSprite(lo[i].toFixed(1), '#' + col.toString(16));
+    s0.position.set(-0.5 + a[0] * 0.12, -0.5 + a[1] * 0.12, -0.5 + a[2] * 0.12 - 0.05);
+    const s1 = textSprite(hi[i].toFixed(1), '#' + col.toString(16));
+    s1.position.set(-0.5 + a[0], -0.5 + a[1], -0.5 + a[2]);
+    sc.add(s0, s1);
+  });
+  sc.add(new THREE.Box3Helper(new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5)), 0x334152));
+  for (const path of k.paths || []) {
+    if (path.length < 2) continue;
+    const g = new THREE.BufferGeometry().setFromPoints(path.map((p) => new THREE.Vector3(...nrm(p))));
+    sc.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x9fb3c8, transparent: true, opacity: 0.7 })));
+  }
+  if ((k.main || []).length > 1) {
+    const g = new THREE.BufferGeometry().setFromPoints(k.main.map((p) => new THREE.Vector3(...nrm(p))));
+    const ml = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xffd84a, depthTest: false }));
+    ml.renderOrder = 2;
+    sc.add(ml);
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.025), new THREE.MeshBasicMaterial({ color: 0xffd84a }));
+    dot.position.set(...nrm(k.main[0]));
+    sc.add(dot);
+  }
+  const ctx = { renderer: rd, stop: false };
+  BH.k3 = ctx;
+  const tick = () => {
+    if (ctx.stop || !cv.isConnected) return;
+    oc.update();
+    rd.render(sc, cam);
+    requestAnimationFrame(tick);
+  };
+  tick();
 }
 
 async function start() {
