@@ -539,7 +539,8 @@ def run_static(sh, X, fixed, pres_dofs, pres_vals, fext, nsteps, extra=None, on_
         xb = x
         if fol:
             xf = extra.follow(x, amp(lam), amp(lt))
-            pdofs = np.intersect1d(np.where(xf != x)[0], free)
+            moved = np.unique(np.where(xf[: sh.nx] != x[: sh.nx])[0] // 3)
+            pdofs = np.intersect1d((3 * moved[:, None] + np.arange(3)).ravel(), free)
             if len(pdofs):
                 extra.set_factor(amp(lam))
                 Hk = sh.hess(x) + extra.hess(x)
@@ -719,8 +720,9 @@ def frequencies(sh, rho, fixed, k=2):
     d = Damping(sh, rho)
     K = sh.hess(sh.x0())[fr][:, fr].tocsc()
     M = d.M[fr][:, fr].tocsc()
-    vals = spla.eigsh(K, k=k, M=M, sigma=0.0, which="LM")[0]
-    return np.sqrt(np.maximum(np.sort(vals), 0.0))
+    vals = np.sort(spla.eigsh(K, k=k + 6, M=M, sigma=-1.0, which="LM")[0])
+    vals = vals[vals > 1e-3 * max(abs(vals).max(), 1e-30)]
+    return np.sqrt(np.maximum(vals[:k], 0.0))
 
 
 def rayleigh(zeta, w1, w2, kind="rayleigh"):
