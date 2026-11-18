@@ -127,6 +127,8 @@ OPS:
  {"op":"set_solver","solver":"calculix"|"barhinge"|"tensormesh"|"shell"}   shell = own large-deformation shell solver (OBJ panels, static only); the only one with self-contact and damping
  {"op":"add_contact","type":"self","friction":mu}   self-contact between all shell faces (solver shell only)
  {"op":"set_step","damping":{"kind":"none"|"mass"|"stiffness"|"rayleigh","zeta":percent,"time":seconds},"amplitude":"linear"|"smooth","element":"auto"|"quad"|"tri"}   damping ratio at modes 1 and 2 (solver shell only); time 0 = automatic
+ {"op":"add_coupling","select":SEL,"ref":[x,y,z]?,"fix":{"1".."6":value},"force":[fx,fy,fz],"moment":[mx,my,mz]}   reference point rigidly tied to the selected nodes (like an Abaqus RP with kinematic coupling); fix dofs 1-3 = ux,uy,uz (mm), 4-6 = rx,ry,rz (rad), value 0 = constrained, nonzero = prescribed; force N and moment N·mm act on the reference point
+ {"op":"update","id":"cp1","fix":{...},"free":[dofs],"force":[...],"moment":[...]}   change a reference point (fix entries are merged)
  {"op":"set_step","device":"auto"|"cpu"|"cuda","precision":"auto"|"float64"|"float32","threads":int}   where the shell element stiffness is computed (GPU = cuda), its precision, CPU threads (0 = auto)
  {"op":"set_divisions","divisions":int}
  {"op":"add_plot","title":str,"x":QUANTITY,"series":[QUANTITY,...]}

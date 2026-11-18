@@ -28,6 +28,7 @@ def default_spec(model=None):
         "bcs": [],
         "loads": [],
         "contacts": [],
+        "couplings": [],
         "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "element": "auto", "device": "auto", "precision": "auto", "threads": 0, "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
         "plots": [],
     }
@@ -69,6 +70,42 @@ def _vec(v, name):
     if not isinstance(v, (list, tuple)) or len(v) != 3:
         raise ValueError(f"{name} 은(는) [x, y, z] 형식이어야 합니다")
     return [_num(x, name) for x in v]
+
+
+def _fix(v):
+    if v is None:
+        return {}
+    if isinstance(v, (list, tuple)):
+        v = {int(d): 0.0 for d in v}
+    out = {}
+    for d, x in dict(v).items():
+        d = int(d)
+        if d < 1 or d > 6:
+            raise ValueError("기준점 자유도는 1~6 (ux, uy, uz, rx, ry, rz) 이어야 합니다")
+        out[str(d)] = _num(x, "fix")
+    return out
+
+
+def _coupling_fields(item, op, model, merge=False):
+    if "select" in op:
+        item["select"] = op["select"]
+        if model is not None and len(resolve(model, item["select"])) < 2:
+            raise ValueError("기준점에 묶을 절점이 2개 이상 필요합니다")
+    if "ref" in op:
+        item["ref"] = None if op["ref"] is None else _vec(op["ref"], "ref")
+    if item.get("ref") is None and model is not None:
+        ids = resolve(model, item["select"])
+        item["ref"] = [round(float(c), 9) for c in model.nodes[ids].mean(0)]
+    if "fix" in op:
+        item["fix"] = {**item.get("fix", {}), **_fix(op["fix"])} if merge else _fix(op["fix"])
+    if "free" in op:
+        for d in op["free"] or []:
+            item.setdefault("fix", {}).pop(str(int(d)), None)
+    for f in ("force", "moment"):
+        if f in op:
+            item[f] = _vec(op[f] if op[f] is not None else [0, 0, 0], f)
+    if "name" in op:
+        item["name"] = str(op["name"])
 
 
 def apply_ops(spec, ops, model=None):
@@ -173,29 +210,43 @@ def apply_ops(spec, ops, model=None):
             if t == "rigid" and not any(s2.get("quantity") == "contact.force" for pl in spec["plots"] for s2 in pl.get("series", [])):
                 spec["plots"].append({"id": _next_id(spec["plots"], "pl"), "title": "접촉력-강체 이동량", "x": {"quantity": "contact.disp"}, "series": [{"quantity": "contact.force"}]})
             log.append(f"접촉 추가 {item['id']}")
+        elif k == "add_coupling":
+            spec.setdefault("couplings", [])
+            if not op.get("select"):
+                raise ValueError("기준점 커플링에는 묶을 영역(select)이 필요합니다")
+            item = {"id": _next_id(spec["couplings"], "cp"), "name": op.get("name") or "기준점", "select": None, "ref": None, "fix": {}, "force": [0.0, 0.0, 0.0], "moment": [0.0, 0.0, 0.0]}
+            _coupling_fields(item, {**op, "select": op["select"]}, model)
+            spec["couplings"].append(item)
+            log.append(f"기준점 커플링 추가 {item['id']}")
         elif k == "remove":
             i = op.get("id")
-            n = len(spec["bcs"]) + len(spec["loads"]) + len(spec["plots"]) + len(spec["contacts"])
-            for key in ("bcs", "loads", "plots", "contacts"):
+            spec.setdefault("couplings", [])
+            keys = ("bcs", "loads", "plots", "contacts", "couplings")
+            n = sum(len(spec[key]) for key in keys)
+            for key in keys:
                 spec[key] = [x for x in spec[key] if x["id"] != i]
-            if n == len(spec["bcs"]) + len(spec["loads"]) + len(spec["plots"]) + len(spec["contacts"]):
+            if n == sum(len(spec[key]) for key in keys):
                 raise ValueError(f"id '{i}' 를 찾을 수 없습니다")
             log.append(f"삭제 {i}")
         elif k == "clear":
             what = op.get("what", "all")
-            for key in ("bcs", "loads", "plots", "contacts"):
+            for key in ("bcs", "loads", "plots", "contacts", "couplings"):
                 if what in (key, "all"):
                     spec[key] = []
             log.append(f"초기화 {what}")
         elif k == "update":
             i = op.get("id")
             hit = None
-            for key in ("bcs", "loads", "plots", "contacts"):
-                for x in spec[key]:
+            for key in ("bcs", "loads", "plots", "contacts", "couplings"):
+                for x in spec.get(key, []):
                     if x["id"] == i:
                         hit = x
             if hit is None:
                 raise ValueError(f"id '{i}' 를 찾을 수 없습니다")
+            if str(i).startswith("cp"):
+                _coupling_fields(hit, {f: v for f, v in op.items() if f not in ("op", "id")}, model, merge=True)
+                log.append(f"수정 {i}")
+                continue
             for f, v in op.items():
                 if f in ("op", "id"):
                     continue
@@ -389,9 +440,18 @@ def warnings_for(spec, model):
         out.append("바-힌지 솔버에는 면(f) 패널이 필요합니다")
     if spec["solver"] == "barhinge" and any(d > 3 for b in spec["bcs"] for d in b["dofs"]):
         out.append("바-힌지 모델에는 회전 자유도가 없어 회전 구속은 적용되지 않습니다 (고정은 병진 구속으로만 반영)")
+    cps = spec.get("couplings") or []
+    if cps and spec["solver"] not in ("shell", "calculix"):
+        out.append("기준점 커플링은 자체 쉘·CalculiX 솔버에서만 적용됩니다")
+    for cp in cps:
+        try:
+            if len(resolve(model, cp["select"])) < 2:
+                out.append(f"{cp['id']}: 묶을 절점이 2개 미만입니다")
+        except Exception:
+            out.append(f"{cp['id']}: 묶을 영역을 찾을 수 없습니다")
     if spec["step"]["type"] == "modal" and not (spec["materials"]["default"].get("rho") or 0) > 0:
         out.append("모달 해석에는 밀도가 필요합니다")
-    if not spec["bcs"]:
+    if not spec["bcs"] and not any(cp.get("fix") for cp in cps):
         out.append("구속이 없습니다 (강체 운동 가능)")
     else:
         t = set()
@@ -439,6 +499,7 @@ def warnings_for(spec, model):
             out.append("변위 제어에는 기준이 되는 힘 또는 압력 하중이 필요합니다")
     moving = any(abs(b.get("value", 0.0)) > 0 for b in spec["bcs"])
     moving = moving or any(c["type"] == "rigid" and any(float(v) != 0 for v in c.get("motion", [])) for c in spec.get("contacts") or [])
+    moving = moving or any(any(float(v) != 0 for v in cp.get("fix", {}).values()) or any(cp.get("force", [0, 0, 0])) or any(cp.get("moment", [0, 0, 0])) for cp in spec.get("couplings") or [])
     if not spec["loads"] and not moving and spec["step"]["type"] != "modal":
         out.append("하중이나 지정 변위가 없습니다")
     return out

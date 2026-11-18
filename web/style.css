@@ -113,3 +113,4 @@ button.danger:hover{background:#7a2c3d}
 #llmInfo b{color:var(--text)}
 #llmInfo .good{color:var(--ok)}
 #llmInfo .badt{color:var(--err)}
+.item .edit .lab { font-size: 11px; opacity: 0.7; min-width: 74px; align-self: center; }

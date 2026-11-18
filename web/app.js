@@ -258,6 +258,19 @@ function buildSymbols() {
       G.symbols.add(new THREE.Points(pg, new THREE.PointsMaterial({ color: c.id === highlightId ? 0xffc857 : col, size: 4, sizeAttenuation: false, depthTest: false })));
     }
   }
+  for (const c of st.preview.couplings || []) {
+    const hot = c.id === highlightId;
+    const col = hot ? 0xffc857 : 0xc084fc;
+    const r = new THREE.Vector3(...c.ref);
+    const seg = [];
+    for (const k of sample(c.nodes.length, 120)) seg.push(r.x, r.y, r.z, ...nodes[c.nodes[k]]);
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
+    G.symbols.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.45, depthTest: false })));
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(s * 0.35, 16, 12), new THREE.MeshBasicMaterial({ color: col, depthTest: false }));
+    ball.position.copy(r);
+    G.symbols.add(ball);
+  }
   const AX = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
   for (const bc of st.preview.bcs) {
     const hot = bc.id === highlightId;
@@ -754,6 +767,61 @@ function renderLists() {
       buildSymbols();
     };
     cl.append(it);
+  }
+  const cpl = $('cpList');
+  cpl.innerHTML = '';
+  const cps = st.spec.couplings || [];
+  $('cpCount').textContent = cps.length ? `${cps.length}개` : '';
+  if (!cps.length) cpl.append(el('div', 'empty', '없음 · 예: "위 끝면을 기준점에 묶어줘"'));
+  for (const c of cps) {
+    const p = (pv.couplings || []).find((x) => x.id === c.id);
+    const it = el('div', 'item' + (highlightId === c.id ? ' sel' : ''));
+    const top = el('div', 'top');
+    const nm = el('span');
+    nm.append(el('span', 'id', c.id), document.createTextNode(c.name || '기준점'));
+    const x = el('button', 'x', '✕');
+    x.onclick = (e) => {
+      e.stopPropagation();
+      ops([{ op: 'remove', id: c.id }]);
+    };
+    top.append(nm, x);
+    it.append(top, el('div', 'desc', p && p.desc ? p.desc : ''));
+    const row = (label, vals, title, mk) => {
+      const ed = el('div', 'edit');
+      ed.append(el('span', 'lab', label));
+      const ins = vals.map((v, k) => {
+        const i = el('input');
+        i.type = 'number';
+        i.step = 'any';
+        i.value = v;
+        i.placeholder = '자유';
+        i.title = title[k];
+        i.onclick = (e) => e.stopPropagation();
+        return i;
+      });
+      ins.forEach((i) => (i.onchange = () => ops([mk(ins)])));
+      ed.append(...ins);
+      return ed;
+    };
+    const fx = c.fix || {};
+    const dn = ['ux (mm)', 'uy (mm)', 'uz (mm)', 'rx (rad)', 'ry (rad)', 'rz (rad)'];
+    const fixRow = (a, b, label) =>
+      row(label, [a, b, b + 1].slice(0, 3).map((k) => (fx[String(k)] ?? '')), [a, b, b + 1].map((k) => `${dn[k - 1]} · 비우면 자유, 0 이면 구속`), (ins) => {
+        const keys = [a, b, b + 1];
+        const fix = {};
+        const free = [];
+        ins.forEach((q, j) => (q.value === '' ? free.push(keys[j]) : (fix[String(keys[j])] = +q.value || 0)));
+        return { op: 'update', id: c.id, fix, free };
+      });
+    it.append(fixRow(1, 2, '병진'), fixRow(4, 5, '회전'));
+    it.append(row('힘 N', c.force || [0, 0, 0], ['Fx', 'Fy', 'Fz'], (ins) => ({ op: 'update', id: c.id, force: ins.map((q) => +q.value || 0) })));
+    it.append(row('모멘트 N·mm', c.moment || [0, 0, 0], ['Mx', 'My', 'Mz'], (ins) => ({ op: 'update', id: c.id, moment: ins.map((q) => +q.value || 0) })));
+    it.onclick = () => {
+      highlightId = highlightId === c.id ? null : c.id;
+      renderLists();
+      buildSymbols();
+    };
+    cpl.append(it);
   }
   const w = $('warnings');
   w.innerHTML = '';

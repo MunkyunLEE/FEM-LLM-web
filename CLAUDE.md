@@ -31,6 +31,8 @@
 - 감쇠: 레일리 등, 1·2차 고유진동수(강체 모드 제외)에서 계산. 누름판 압괴는 스텝 시간을 1차 주기의 약 1000배로 두면 감쇠 소산이 외부 일의 3% 안팎
 - 에너지 이력 `energy.*` 와 `energy.external` 의 균형 오차를 결과 검증에 씀
 - 재개: `solve(model, spec, checkpoint=path, every=초, resume=path)`
+- 기준점 커플링: spec `couplings`(`add_coupling`, `update` 로 `fix`/`force`/`moment`), 자체 쉘은 `Augmented`(기준점 6자유도 추가) + `Coupling`(벌칙), CalculiX 는 `*RIGID BODY`. 시험 `tests/test_coupling.py`
+- 진행 표시: `femweb/progress.py` (`context`, `stage`, `detail`), 서버 `GET /api/progress`
 - 환경 변수: `FEMWEB_DEVICE`(cpu/cuda/mps/auto), `FEMWEB_HESS`(float32/float64), `FEMWEB_THREADS`
 
 ## 커밋

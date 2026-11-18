@@ -651,6 +651,74 @@ def parse_contact(c, model, spec):
     return [{"op": "add_contact", "type": "pair", "a": {"group": a}, "b": {"group": b}, "friction": mu or 0.0}], [], [], c.leftover(), {}
 
 
+CP_WORD = r"기준점|커플링|coupling|reference\s*point|(?<![a-z])rp(?![a-z])|(?<![a-z])cp\s*\d+"
+
+
+def parse_coupling(c, model, spec, ctx):
+    cps = spec.get("couplings") or []
+    idm = c.take(r"(?<![a-z])cp\s*(\d+)(?![a-z0-9])")
+    target = "cp" + idm.group(1) if idm else None
+    if target and not any(x["id"] == target for x in cps):
+        return [], [f"{target} 기준점이 없습니다"], [], [], {}
+    create = c.has(r"묶|연결|만들|추가|생성|붙여|커플링\s*(?:해|걸|추가)|couple|tie|create|add")
+    if create and not target:
+        c.takeall(r"기준점\s*(?:에|으로|로|과|와)?|커플링|coupling|reference\s*point|(?<![a-z])rp(?![a-z])|(?:강체\s*(?:로|처럼)?)")
+        sel, notes = selection(c, model, spec, ctx)
+        if not sel:
+            return [], ["기준점에 묶을 면을 알려주세요 (예: 위 끝면을 기준점에 묶어줘)"], [], [], {}
+        c.takeall(r"묶어\w*|묶고|묶기|연결\w*|만들어\w*|추가\w*|생성\w*|붙여\w*|해\s*줘|해줘|을|를|에|면|끝면|단면")
+        return [{"op": "add_coupling", "select": sel}], [], notes, c.leftover(), {}
+    if not cps:
+        return [], ["기준점이 없습니다. 먼저 '위 끝면을 기준점에 묶어줘'처럼 만들어 주세요"], [], [], {}
+    if target is None:
+        target = cps[-1]["id"]
+    c.takeall(r"기준점\s*(?:의|에|을|를|은|는)?|(?<![a-z])rp(?![a-z])\s*(?:의|에)?")
+    op = {"op": "update", "id": target}
+    deg = None
+    m = c.take(r"(?<![a-z])([xyz])\s*축?\s*(?:둘레|기준|방향|중심)?\s*(?:로|으로|에|의)?\s*(?:모멘트|moment|토크|torque|비틀\w*)\s*(?:를|을)?\s*" + NUM + r"\s*(kn\s*[·.*]?\s*m|n\s*[·.*]?\s*m(?!m)|n\s*[·.*]?\s*mm|nmm)?")
+    if not m:
+        m2 = c.take(r"(?:모멘트|moment|토크|torque)\s*" + NUM + r"\s*(kn\s*[·.*]?\s*m|n\s*[·.*]?\s*m(?!m)|n\s*[·.*]?\s*mm|nmm)?\s*(?:를|을)?\s*(?<![a-z])([xyz])\s*축?")
+        if m2:
+            m = (m2.group(3), m2.group(1), m2.group(2))
+    else:
+        m = (m.group(1), m.group(2), m.group(3))
+    if m:
+        unit = (m[2] or "nmm").replace(" ", "").replace("·", "").replace(".", "").replace("*", "")
+        f = {"knm": 1e6, "nm": 1e3, "nmm": 1.0}.get(unit, 1.0)
+        v = [0.0, 0.0, 0.0]
+        v[AX.index(m[0])] = float(m[1]) * f
+        op["moment"] = v
+    m = c.take(r"(?<![a-z])([xyz])\s*축?\s*(?:둘레|기준|중심)?\s*(?:로|으로|에)?\s*" + NUM + r"\s*(rad|라디안|도|deg|°)\s*(?:만큼)?\s*(?:강제\s*)?(?:회전|돌려|rotat\w*)")
+    if m:
+        ang = float(m.group(2)) * (math.pi / 180.0 if m.group(3) in ("도", "deg", "°") else 1.0)
+        op["fix"] = {str(AX.index(m.group(1)) + 4): ang}
+    else:
+        m = c.take(r"(?<![a-z])([-+]?)\s*([xyz])\s*(?:축)?\s*(?:방향)?\s*(?:으로|로)?\s*" + NUM + r"\s*(mm)\s*(?:만큼)?\s*(?:강제\s*변위|이동|밀어|눌러|당겨|변위)?")
+        if m:
+            val = float(m.group(3)) * (-1.0 if m.group(1) == "-" else 1.0)
+            op.setdefault("fix", {})[str(AX.index(m.group(2)) + 1)] = val
+    m = c.take(r"(?<![a-z])([-+]?)\s*([xyz])\s*(?:축)?\s*(?:방향)?\s*(?:으로|로|에)?\s*(?:힘|하중|force)?\s*" + NUM + r"\s*(kn|n)(?![a-z])")
+    if m:
+        val = float(m.group(3)) * (1e3 if m.group(4) == "kn" else 1.0) * (-1.0 if m.group(1) == "-" else 1.0)
+        v = [0.0, 0.0, 0.0]
+        v[AX.index(m.group(2))] = val
+        op["force"] = v
+    if c.take(r"(?:모든|전체)?\s*(?:자유도\s*)?(?:해제|풀어|free|release)"):
+        op["fix"] = {}
+        op["free"] = [1, 2, 3, 4, 5, 6]
+    elif c.has(r"구속|고정|막|잡|fix|constrain"):
+        d = bc_dofs(c)
+        if c.take(r"완전\s*고정|모두\s*고정|전부\s*고정|고정\s*해|고정(?!\s*단)") and not d:
+            d = [1, 2, 3, 4, 5, 6]
+        c.takeall(r"구속\w*|고정\w*|막아\w*|잡아\w*")
+        if d:
+            op.setdefault("fix", {}).update({str(k): 0.0 for k in d if str(k) not in op.get("fix", {})})
+    if len(op) == 2:
+        return [], [f"{target} 에 무엇을 할지 알려주세요 (예: x축 모멘트 1e6 N·mm, z 방향 -5 mm, x축 0.1 rad 회전, 회전 구속)"], [], [], {}
+    c.takeall(r"을|를|에|으로|로|주고|줘|해줘|걸어\w*|가해\w*|적용\w*|하중|강제|만큼")
+    return [op], [], [], c.leftover(), {}
+
+
 def parse_clause(text, model, spec, ctx):
     c = Clause(text)
     ops = []
@@ -667,6 +735,10 @@ def parse_clause(text, model, spec, ctx):
         if p:
             return [p], [], [], [], {}
         return [], ["어떤 값을 그릴지 알려주세요 (에너지, 반력, 변위, 응력, 접힘각, 하중-변위, 좌굴 계수, 고유진동수)"], [], [], {}
+    if re.search(CP_WORD, t):
+        r = parse_coupling(c, model, spec, ctx)
+        if r is not None:
+            return r
     if re.search(r"되돌려|되돌리|실행\s*취소|방금\s*(?:거|것|한\s*거)?\s*(?:취소|삭제|지워)|이전\s*(?:상태)?로|(?<![a-z])undo(?![a-z])|revert", t):
         return [], [], [], [], {"undo": True}
     if re.search(r"접촉|마찰|(?<![a-z])contact|friction|강체|압입|인덴터|indent|rigid|(?<![가-힣])구(?:를|로|가|\s)|sphere|(?<![a-z])ball(?![a-z])", t) and not re.search(r"구속|구간|구조|변위\s*제어|displacement\s*-?\s*control", t.replace("구를", "").replace("구로", "")) or re.search(r"(?<![a-z])ct\s*\d+(?![a-z0-9])", t):
@@ -1337,7 +1409,7 @@ def describe_op(o):
     if k == "remove":
         return f"{o['id']} 삭제"
     if k == "clear":
-        return {"bcs": "구속 전체 삭제", "loads": "하중 전체 삭제", "plots": "그래프 전체 삭제", "contacts": "접촉 전체 삭제", "all": "조건 전체 삭제"}[o.get("what", "all")]
+        return {"bcs": "구속 전체 삭제", "loads": "하중 전체 삭제", "plots": "그래프 전체 삭제", "contacts": "접촉 전체 삭제", "couplings": "기준점 전체 삭제", "all": "조건 전체 삭제"}[o.get("what", "all")]
     if k == "add_contact":
         mu = f", 마찰 {o.get('friction', 0):g}"
         if o.get("type") == "self":
@@ -1348,6 +1420,21 @@ def describe_op(o):
         if o.get("shape") == "sphere":
             return f"강체 구 접촉 추가: 반지름 {o['radius']:g} mm{mv}{mu}"
         return f"강체 평면 접촉 추가: 법선 [" + ", ".join(f"{v:g}" for v in o.get("normal", [0, 0, 1])) + f"]{mv}{mu}"
+    if k == "add_coupling":
+        return f"기준점 커플링: {describe(o.get('select'))} 의 절점을 기준점 하나에 강체로 묶음"
+    if k == "update" and str(o.get("id", "")).startswith("cp"):
+        parts = []
+        nm = ["ux", "uy", "uz", "rx", "ry", "rz"]
+        if "free" in o:
+            parts.append("모든 자유도 해제")
+        for d, v in (o.get("fix") or {}).items():
+            j = int(d)
+            parts.append(f"{nm[j - 1]} = {v:g} {'rad' if j > 3 else 'mm'}" if v else f"{nm[j - 1]} 구속")
+        if o.get("force"):
+            parts.append(f"힘 {fmt_vec(o['force'])} N")
+        if o.get("moment"):
+            parts.append(f"모멘트 {fmt_vec(o['moment'])} N·mm")
+        return f"기준점 {o['id']}: " + ", ".join(parts)
     if k == "update":
         return f"{o['id']} 수정: " + ", ".join(f"{a}={fmt_vec(b) if isinstance(b, list) else b}" for a, b in o.items() if a not in ("op", "id"))
     if k == "set_material":

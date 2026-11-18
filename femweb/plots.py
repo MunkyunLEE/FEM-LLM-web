@@ -18,6 +18,7 @@ LABELS = {
     "energy.friction": "마찰 소산 에너지 (N·mm)",
     "energy.contact": "접촉 장벽 에너지 (N·mm)",
     "energy.external": "외부 일 (N·mm)",
+    "energy.coupling": "기준점 결합 에너지 (N·mm)",
     "contact.count": "접촉 쌍 수",
     "contact.gap": "최소 접촉 간격 (mm)",
     "reaction.x": "반력 x (N)",
@@ -57,6 +58,9 @@ def _series(result, model, q):
         return np.arange(1, len(result.frames) + 1, dtype=float), "프레임"
     if name in result.history:
         lab = LABELS.get(name)
+        if lab is None and name.startswith("rp.") and name.count(".") == 2:
+            _, cid, q = name.split(".")
+            lab = f"기준점 {cid} " + {"ux": "변위 x (mm)", "uy": "변위 y (mm)", "uz": "변위 z (mm)", "rx": "회전 x (rad)", "ry": "회전 y (rad)", "rz": "회전 z (rad)", "fx": "힘 x (N)", "fy": "힘 y (N)", "fz": "힘 z (N)", "mx": "모멘트 x (N·mm)", "my": "모멘트 y (N·mm)", "mz": "모멘트 z (N·mm)"}.get(q, q)
         if lab is None and name.startswith("reaction.") and name.count(".") == 2:
             _, bid, cc = name.split(".")
             lab = f"반력 {bid} {cc} (N)"

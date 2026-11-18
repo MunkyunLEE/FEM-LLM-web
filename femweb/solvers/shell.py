@@ -1013,6 +1013,133 @@ class IPCContact:
         return -g[self.pl_nodes[k]].sum(0)
 
 
+def _rot_mat(psi):
+    p = torch.as_tensor(psi, dtype=torch.float64)
+    t2 = (p * p).sum()
+    if float(t2.detach()) > 0.25:
+        th = torch.sqrt(t2)
+        a = torch.sin(th) / th
+        b = (1 - torch.cos(th)) / t2
+    else:
+        a = 1 - t2 / 6 * (1 - t2 / 20 * (1 - t2 / 42 * (1 - t2 / 72 * (1 - t2 / 110))))
+        b = 0.5 * (1 - t2 / 12 * (1 - t2 / 30 * (1 - t2 / 56 * (1 - t2 / 90 * (1 - t2 / 132)))))
+    K = torch.zeros(3, 3, dtype=torch.float64)
+    K[0, 1], K[0, 2], K[1, 0], K[1, 2], K[2, 0], K[2, 1] = -p[2], p[1], p[2], -p[0], -p[1], p[0]
+    return torch.eye(3, dtype=torch.float64) + a * K + b * (K @ K)
+
+
+def rotation(psi):
+    return _rot_mat(psi).numpy()
+
+
+def rotation_jac(psi):
+    J = torch.autograd.functional.jacobian(_rot_mat, torch.as_tensor(np.asarray(psi, float)))
+    return J.numpy()
+
+
+class Augmented:
+    def __init__(self, sh, nextra):
+        self.sh = sh
+        self.n0 = sh.ndof
+        self.nextra = nextra
+
+    def __getattr__(self, k):
+        return getattr(self.sh, k)
+
+    @property
+    def ndof(self):
+        return self.n0 + self.nextra
+
+    def x0(self, X=None):
+        return np.concatenate([self.sh.x0(X), np.zeros(self.nextra)])
+
+    def energy(self, x):
+        return self.sh.energy(x[: self.n0])
+
+    def grad(self, x):
+        return np.concatenate([self.sh.grad(x[: self.n0]), np.zeros(self.nextra)])
+
+    def hess(self, x):
+        H = self.sh.hess(x[: self.n0]).tocoo()
+        return sp.coo_matrix((H.data, (H.row, H.col)), shape=(self.ndof, self.ndof)).tocsr()
+
+    def commit(self, x):
+        if hasattr(self.sh, "commit"):
+            self.sh.commit(x[: self.n0])
+
+    def reset(self, x):
+        y = self.sh.reset(x[: self.n0]) if hasattr(self.sh, "reset") else x[: self.n0]
+        return np.concatenate([y, x[self.n0 :]])
+
+
+class Coupling:
+    def __init__(self, sh, groups, k):
+        self.sh = sh
+        self.k = float(k)
+        self.groups = []
+        for nodes, ref, base in groups:
+            nodes = np.asarray(nodes, int)
+            r = sh.X[nodes] - np.asarray(ref, float)[None, :]
+            self.groups.append((nodes, np.asarray(ref, float), int(base), r))
+
+    def begin(self, x):
+        pass
+
+    def _parts(self, x):
+        P = x[: self.sh.nx].reshape(-1, 3)
+        for nodes, ref, base, r in self.groups:
+            u = x[base : base + 3]
+            psi = x[base + 3 : base + 6]
+            R = rotation(psi)
+            e = P[nodes] - ref - u - r @ R.T
+            yield nodes, base, r, e, psi
+
+    def energy(self, x):
+        return float(sum(0.5 * self.k * (e * e).sum() for _, _, _, e, _ in self._parts(x)))
+
+    def grad(self, x):
+        g = np.zeros(self.sh.ndof)
+        for nodes, base, r, e, psi in self._parts(x):
+            dR = rotation_jac(psi)
+            J = np.einsum("abk,nb->nak", dR, r)
+            ke = self.k * e
+            np.add.at(g, (3 * nodes[:, None] + np.arange(3)).ravel(), ke.ravel())
+            g[base : base + 3] -= ke.sum(0)
+            g[base + 3 : base + 6] -= np.einsum("na,nak->k", ke, J)
+        return g
+
+    def hess(self, x):
+        rows, cols, vals = [], [], []
+
+        def blk(ri, ci, M):
+            ri = np.asarray(ri)
+            ci = np.asarray(ci)
+            rows.append(np.repeat(ri, len(ci)))
+            cols.append(np.tile(ci, len(ri)))
+            vals.append(np.asarray(M).ravel())
+
+        I = np.eye(3)
+        for nodes, base, r, e, psi in self._parts(x):
+            dR = rotation_jac(psi)
+            J = np.einsum("abk,nb->nak", dR, r)
+            U = np.arange(base, base + 3)
+            Q = np.arange(base + 3, base + 6)
+            for j, nd in enumerate(nodes):
+                X3 = 3 * nd + np.arange(3)
+                blk(X3, X3, self.k * I)
+                blk(X3, U, -self.k * I)
+                blk(U, X3, -self.k * I)
+                blk(X3, Q, -self.k * J[j])
+                blk(Q, X3, -self.k * J[j].T)
+            blk(U, U, self.k * len(nodes) * I)
+            Js = J.sum(0)
+            blk(U, Q, self.k * Js)
+            blk(Q, U, self.k * Js.T)
+            blk(Q, Q, self.k * np.einsum("nak,nal->kl", J, J))
+        n = self.sh.ndof
+        return sp.coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))), shape=(n, n)).tocsr()
+
+
 def triangulate(model):
     X = model.nodes
     T, G = [], []
@@ -1111,6 +1238,7 @@ STATE_KEYS = ("d", "pc", "ep", "al", "sig", "wp")
 
 
 def _state(obj, keys):
+    obj = obj.sh if isinstance(obj, Augmented) else obj
     out = {}
     for k in keys:
         v = getattr(obj, k, None)
@@ -1124,6 +1252,7 @@ def _state(obj, keys):
 
 
 def _restore(obj, data):
+    obj = obj.sh if isinstance(obj, Augmented) else obj
     for k, v in data.items():
         cur = getattr(obj, k, None)
         if torch.is_tensor(cur):
@@ -1300,14 +1429,49 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
     if quad:
         T = sh.tris
         tt = sh.thick
+    cps = spec.get("couplings") or []
+    cp_info = []
+    if cps:
+        n0 = sh.ndof
+        groups = []
+        for j, cp in enumerate(cps):
+            ids = resolve(model, cp["select"])
+            ids = ids[used[ids]]
+            if len(ids) < 2:
+                raise ValueError(f"{cp['id']}: 묶을 절점이 2개 미만입니다")
+            base = n0 + 6 * j
+            groups.append((ids, cp["ref"], base))
+            cp_info.append((cp, base, ids))
+        sh = Augmented(sh, 6 * len(cps))
+        kcp = 1e3 * E * float(np.mean(tq if quad else tt))
+        coupling = Coupling(sh, groups, kcp)
+        fixed = list(fixed)
+        pres, pval = list(pres), list(pval)
+        for cp, base, ids in cp_info:
+            for d, v in (cp.get("fix") or {}).items():
+                dof = base + int(d) - 1
+                if float(v) == 0.0:
+                    fixed.append(dof)
+                else:
+                    pres.append(dof)
+                    pval.append(float(v))
+        fixed = np.array(sorted(set(fixed)), int)
+        pres = np.array(pres, int)
+        pval = np.array(pval, float)
+        msgs.append(f"기준점 커플링 {len(cps)}개: 묶인 절점의 병진을 기준점의 강체 운동(병진 + 유한 회전)에 벌칙 강성 {kcp:.3g} N/mm 로 묶었습니다. 절점 회전 자유도는 묶지 않습니다 (Abaqus 운동학적 커플링 U1~U3 에 해당). 기준점 모멘트는 회전 벡터에 일을 하는 하중이라 한 축 둘레 회전에서 정확합니다")
+        if imp > 0:
+            msgs.append("기준점이 있는 모델의 초기 결함 모드는 기준점 조건 없이 구한 좌굴 모드입니다")
     fext = np.zeros(sh.ndof)
     fext[: sh.nx] = F.ravel()
     if quad:
-        fext[sh.nx :] = M.ravel()
+        fext[sh.nx : sh.nx + M.size] = M.ravel()
         fext[sh.fixed_phi] = 0.0
+    for cp, base, ids in cp_info:
+        fext[base : base + 3] = cp.get("force") or [0.0, 0.0, 0.0]
+        fext[base + 3 : base + 6] = cp.get("moment") or [0.0, 0.0, 0.0]
     fext[fixed] = 0.0
     n = max(1, int(st.get("increments", 25)))
-    parts = []
+    parts = [coupling] if cps else []
     cs = contacts_of(spec, True)
     ipc = None
     rigid_ids = []
@@ -1358,7 +1522,7 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
     if kind != "none":
         if rho <= 0:
             raise ValueError("감쇠를 쓰려면 재료 밀도가 필요합니다")
-        allc = np.concatenate([fixed, pres]).astype(int)
+        allc = np.concatenate([fixed, pres, np.arange(sh.n0, sh.ndof) if cps else np.zeros(0)]).astype(int)
         _pg.context("감쇠용 1·2차 고유진동수 계산 중")
         w = frequencies(sh, rho, allc, k=2)
         if kind == "direct":
@@ -1406,6 +1570,8 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
     moving = np.concatenate([fixed, pres]).astype(int)
     if len(pres):
         moving = pres
+    moving = moving[moving < sh.nx]
+    x0full = sh.x0(X)
 
     def on_step(r):
         lam = r["lam"]
@@ -1417,9 +1583,11 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
             fields["PEEQ"] = sh.peeq_nodal() if quad else _nodal(sh, sh.al.max(1).values.numpy())
         g = r["reaction"]
         rf = np.zeros((sh.n, 3))
-        rf.ravel()[fixed] = g[fixed]
-        if len(pres):
-            rf.ravel()[pres] = g[pres]
+        tf = fixed[fixed < sh.nx]
+        rf.ravel()[tf] = g[tf]
+        tp = pres[pres < sh.nx] if len(pres) else pres
+        if len(tp):
+            rf.ravel()[tp] = g[tp]
         fields["RF"] = np.linalg.norm(rf, axis=1)
         if ipc is not None:
             cn, ctg = ipc.nodal(x)
@@ -1473,16 +1641,25 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
                 dl_.append(amp(lam) * mv)
         if len(pres):
             fl.append(g[pres])
-            dl_.append(x[pres] - X.ravel()[pres])
+            dl_.append(x[pres] - x0full[pres])
         fl.append(fext[: sh.nx] * amp(lam))
         dl_.append(x[: sh.nx] - X.ravel())
+        if cps:
+            fl.append(fext[sh.n0 :] * amp(lam))
+            dl_.append(x[sh.n0 :])
+            for cp, base, ids in cp_info:
+                for k, nm in enumerate(("ux", "uy", "uz", "rx", "ry", "rz")):
+                    hist.setdefault(f"rp.{cp['id']}.{nm}", []).append(float(x[base + k]))
+                for k, nm in enumerate(("fx", "fy", "fz", "mx", "my", "mz")):
+                    hist.setdefault(f"rp.{cp['id']}.{nm}", []).append(float(r["reaction"][base + k] + fext[base + k] * amp(lam)))
+            hist.setdefault("energy.coupling", []).append(coupling.energy(x))
         cur_f, cur_d = np.concatenate(fl), np.concatenate(dl_)
         pf = np.zeros_like(cur_f) if acc["f"] is None else acc["f"]
         pd_ = np.zeros_like(cur_d) if acc["d"] is None else acc["d"]
         acc["w"] += float(0.5 * (cur_f + pf) @ (cur_d - pd_))
         acc["f"], acc["d"] = cur_f, cur_d
         hist["energy.external"].append(acc["w"])
-        hist["energy.total"].append(hist["energy.strain"][-1] + hist["energy.plastic"][-1] + hist["energy.damping"][-1] + hist["energy.kinetic"][-1] + hist["energy.friction"][-1] + hist["energy.contact"][-1])
+        hist["energy.total"].append(hist["energy.strain"][-1] + hist["energy.plastic"][-1] + hist["energy.damping"][-1] + hist["energy.kinetic"][-1] + hist["energy.friction"][-1] + hist["energy.contact"][-1] + (hist["energy.coupling"][-1] if cps else 0.0))
         if progress:
             progress(lam)
 
@@ -1545,6 +1722,12 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
     msgs.append("총 에너지 = 변형 + 소성 소산 + 감쇠 소산 + 운동 + 마찰 소산 + 접촉 장벽 에너지. 외부 일(강체 이동·지정 변위·하중이 한 일)과 비교하면 해석의 에너지 균형을 확인할 수 있습니다")
     for bid in bc_dofs:
         res.summary[f"반력 {bid} (N)"] = [round(hist[f"reaction.{bid}.{nm}"][-1], 4) for nm in "xyz"]
+    for cp, base, ids in cp_info:
+        c = cp["id"]
+        res.summary[f"기준점 {c} 변위 (mm)"] = [round(hist[f"rp.{c}.u{a}"][-1], 6) for a in "xyz"]
+        res.summary[f"기준점 {c} 회전 (rad)"] = [round(hist[f"rp.{c}.r{a}"][-1], 6) for a in "xyz"]
+        res.summary[f"기준점 {c} 힘 (N)"] = [round(hist[f"rp.{c}.f{a}"][-1], 4) for a in "xyz"]
+        res.summary[f"기준점 {c} 모멘트 (N·mm)"] = [round(hist[f"rp.{c}.m{a}"][-1], 3) for a in "xyz"]
     if ipc is not None:
         res.summary["접촉 쌍 수 (끝)"] = int(hist["contact.count"][-1])
         res.summary["접촉 수직력 합 (N, 끝)"] = round(hist["contact.normal"][-1], 4)

@@ -140,4 +140,20 @@ def preview(model, spec):
         v["desc"] = cdesc(c)
         if v.get("error"):
             out["errors"].append(f"{c['id']}: {v['error']}")
+    out["couplings"] = []
+    nm = ["ux", "uy", "uz", "rx", "ry", "rz"]
+    for cp in spec.get("couplings") or []:
+        try:
+            ids = resolve(model, cp["select"])
+            fx = cp.get("fix") or {}
+            parts = [f"{describe(cp['select'])} 절점 {len(ids)}개 → 기준점 ({', '.join(f'{v:g}' for v in cp['ref'])})"]
+            if fx:
+                parts.append(", ".join(f"{nm[int(d) - 1]}={v:g}" if v else f"{nm[int(d) - 1]} 구속" for d, v in sorted(fx.items())))
+            if any(cp.get("force", [0, 0, 0])):
+                parts.append("힘 [" + ", ".join(f"{v:g}" for v in cp["force"]) + "] N")
+            if any(cp.get("moment", [0, 0, 0])):
+                parts.append("모멘트 [" + ", ".join(f"{v:g}" for v in cp["moment"]) + "] N·mm")
+            out["couplings"].append({"id": cp["id"], "nodes": ids.tolist(), "ref": cp["ref"], "desc": " · ".join(parts)})
+        except Exception as e:
+            out["errors"].append(f"{cp['id']}: {e}")
     return out

@@ -6,6 +6,7 @@ import tempfile
 import time
 import numpy as np
 from ..loads import assemble, bc_table
+from ..select import resolve
 from ..result import Result, von_mises
 from ..spec import material_for, section_for
 
@@ -196,11 +197,27 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         ref = len(nodes) - 2
         eid += 1
         ctl_eid = eid
+    cpn = []
+    for cp in spec.get("couplings") or []:
+        sel = {int(i) for i in resolve(model, cp["select"])}
+        ext = set(sel)
+        for (a0, b0), mn in mids.items():
+            if a0 in sel and b0 in sel:
+                ext.add(mn)
+        nodes.append(np.asarray(cp["ref"], float))
+        nodes.append(np.asarray(cp["ref"], float))
+        cpn.append((cp, sorted(ext), len(nodes) - 2, len(nodes) - 1))
     L.append("*NODE, NSET=NALL")
     for i, p in enumerate(nodes):
         L.append(f"{i + 1}, {p[0]:.9g}, {p[1]:.9g}, {p[2]:.9g}")
     if ref is not None:
         L += ["*NSET, NSET=NREF", f"{ref + 1}", "*NSET, NSET=NREF2", f"{ref + 2}", "*ELEMENT, TYPE=T3D2, ELSET=ECTL", f"{ctl_eid}, {ref + 1}, {ref + 2}"]
+    for cp, ext, r1, r2 in cpn:
+        tag = cp["id"].upper()
+        L.append(f"*NSET, NSET={tag}")
+        for i in range(0, len(ext), 12):
+            L.append(", ".join(str(x + 1) for x in ext[i : i + 12]))
+        L += [f"*NSET, NSET={tag}R", f"{r1 + 1}", f"*NSET, NSET={tag}Q", f"{r2 + 1}", f"*RIGID BODY, NSET={tag}, REF NODE={r1 + 1}, ROT NODE={r2 + 1}"]
     names = {}
     for k, key in enumerate(elsets):
         names[key] = f"ES{k + 1}"
@@ -340,6 +357,14 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
     solid_only = len(model.solids) > 0 and not model.beams and not model.shells
     zero = [(n, d) for (n, d), v in table.items() if v == 0.0 and not (solid_only and d > 3)]
     moving = [(n, d, v) for (n, d), v in table.items() if v != 0.0 and not (solid_only and d > 3)]
+    for cp, ext, r1, r2 in cpn:
+        for dd, v in (cp.get("fix") or {}).items():
+            j = int(dd)
+            nd, k = (r1, j) if j <= 3 else (r2, j - 3)
+            if float(v) == 0.0:
+                zero.append((nd, k))
+            else:
+                moving.append((nd, k, float(v)))
     if model.solids is not None and len(model.solids):
         extra_z = []
         for (a, b), mnode in mids.items():
@@ -386,6 +411,12 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
     if kind != "modal":
         a = assemble(model, spec)
         F = nodal(a)
+        for cp, ext, r1, r2 in cpn:
+            for k in range(3):
+                if cp.get("force") and cp["force"][k]:
+                    F[(r1, k + 1)] = F.get((r1, k + 1), 0.0) + float(cp["force"][k])
+                if cp.get("moment") and cp["moment"][k]:
+                    F[(r2, k + 1)] = F.get((r2, k + 1), 0.0) + float(cp["moment"][k])
         meta_cload = dict(F)
         if F:
             L.append("*CLOAD")
@@ -402,6 +433,9 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         L += [f"*NODE FILE{o2}", "U, RF", "*EL FILE", "S", "*EL PRINT, ELSET=EALL, TOTALS=ONLY", "ELSE"]
         if ref is not None:
             L += ["*NODE PRINT, NSET=NREF", "U", "*NODE PRINT, NSET=NREF2", "RF"]
+        for cp, ext, r1, r2 in cpn:
+            tag = cp["id"].upper()
+            L += [f"*NODE PRINT, NSET={tag}R", "U", f"*NODE PRINT, NSET={tag}Q", "U", f"*NODE PRINT, NSET={tag}", "U, RF"]
         if cx:
             L += cx["print"]
     L.append("*END STEP")
@@ -416,6 +450,7 @@ def build_inp(model, base, spec, step=None, perturb=None, out2d=False, ctl=None)
         d0 = cb["dofs"][0]
         meta["ctl"] = sorted(n for n, d, _ in moving if d == d0 and n in cs)
     meta["ref"] = ref
+    meta["couplings"] = [(cp["id"], r1, r2) for cp, ext, r1, r2 in cpn]
     meta["cload"] = meta_cload
     meta["contact"] = cx
     if cx:
@@ -460,6 +495,23 @@ def run_ccx(inp, threads=None):
     dat_text = open(dat).read() if os.path.exists(dat) else ""
     shutil.rmtree(d, ignore_errors=True)
     return frd_text, dat_text, out
+
+
+def _set_blocks(dat, head, tag):
+    out = []
+    for m in re.finditer(head + r" for set " + tag + r" and time\s+\S+\s*\n", dat):
+        blk = {}
+        for ln in dat[m.end() :].splitlines():
+            t = ln.split()
+            if not t:
+                if blk:
+                    break
+                continue
+            if len(t) < 4 or not t[0].isdigit():
+                break
+            blk[int(t[0])] = tuple(float(x) for x in t[1:4])
+        out.append(blk)
+    return out
 
 
 def _sta_last(path):
@@ -811,6 +863,36 @@ def solve(model, base, spec, progress=None):
             res.summary["반력 합 (N)"] = [round(x, 4) for x in reac[-1]]
         if energy:
             res.summary["변형에너지 (N·mm)"] = energy[-1]
+        for cid, r1, r2 in meta.get("couplings") or []:
+            tag = cid.upper()
+            vals = {}
+            for suf, off in (("R", 0), ("Q", 3)):
+                rows = re.findall(r"displacements \(vx,vy,vz\) for set " + tag + suf + r" and time\s+\S+\s*\n(?:\s*\n)?\s*\d+\s+(\S+)\s+(\S+)\s+(\S+)", dat)
+                vals[("u", off)] = [[float(x) for x in r] for r in rows[-len(times) :]] if len(rows) >= len(times) else None
+            ublk = _set_blocks(dat, "displacements \\(vx,vy,vz\\)", tag)
+            fblk = _set_blocks(dat, "forces \\(fx,fy,fz\\)", tag)
+            if len(fblk) >= len(times) and len(ublk) >= len(times) and vals.get(("u", 0)):
+                fs, ms = [], []
+                refp = np.asarray(next(c["ref"] for c in spec["couplings"] if c["id"] == cid), float)
+                for k in range(len(times)):
+                    fb, ub = fblk[-len(times) + k], ublk[-len(times) + k]
+                    ids = np.array(sorted(fb))
+                    fv = np.array([fb[i] for i in ids])
+                    pv = meta["nodes"][ids - 1] + np.array([ub.get(i, (0.0, 0.0, 0.0)) for i in ids])
+                    rc = refp + np.asarray(vals[("u", 0)][k])
+                    fs.append(fv.sum(0).tolist())
+                    ms.append(np.cross(pv - rc, fv).sum(0).tolist())
+                vals[("f", 0)] = fs
+                vals[("f", 3)] = ms
+            names = {("u", 0): ("ux", "uy", "uz"), ("u", 3): ("rx", "ry", "rz"), ("f", 0): ("fx", "fy", "fz"), ("f", 3): ("mx", "my", "mz")}
+            for key, nm in names.items():
+                if vals.get(key):
+                    arr = np.array(vals[key])
+                    for c, n3 in enumerate(nm):
+                        res.history[f"rp.{cid}.{n3}"] = arr[:, c].tolist()
+            for lab, key in (("변위 (mm)", ("u", 0)), ("회전 (rad)", ("u", 3)), ("힘 (N)", ("f", 0)), ("모멘트 (N·mm)", ("f", 3))):
+                if vals.get(key):
+                    res.summary[f"기준점 {cid} {lab}"] = [round(v, 6) for v in vals[key][-1]]
         cx = meta.get("contact")
         if cx and cx["pairs"]:
             from ..contact import contacts_of, record as crecord
