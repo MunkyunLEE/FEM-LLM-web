@@ -177,3 +177,14 @@ def test_export_gif():
     r = c.post("/api/export/gif", json={"frames": frames, "fps": 5})
     assert r.status_code == 200 and r.content[:3] == b"GIF"
     assert Image.open(io.BytesIO(r.content)).n_frames == 2
+
+
+def test_every_example_loads_with_conditions():
+    names = [e["name"] for e in c.get("/api/examples").json()]
+    for n in names:
+        for preset in (1, 0):
+            r = c.post(f"/api/examples/{n}?preset={preset}")
+            assert r.status_code == 200, (n, preset, r.text)
+    r = c.post("/api/examples/tube_platen?preset=1").json()
+    rig = [x for x in r["spec"]["contacts"] if x["type"] == "rigid"]
+    assert rig and rig[0]["point"] is not None and abs(rig[0]["point"][2] - 120.5) < 1e-6

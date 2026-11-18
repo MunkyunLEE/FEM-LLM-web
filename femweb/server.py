@@ -151,8 +151,10 @@ def load_example(name: str, preset: int = 1):
             data = open(os.path.join(EXAMPLES, ex["file"]), "rb").read()
             base = load_file(ex["file"], data, ex.get("size"))
             ops = ex["ops"] if preset else [o for o in ex["ops"] if o["op"].startswith("set_")]
-            spec, _ = apply_ops(default_spec(base), ops, None)
-            set_model(base, spec)
+            set_model(base)
+            if ops:
+                _apply(ops)
+            S["undo"] = []
             return state()
         except HTTPException:
             raise
