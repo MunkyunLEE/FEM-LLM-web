@@ -114,3 +114,8 @@ button.danger:hover{background:#7a2c3d}
 #llmInfo .good{color:var(--ok)}
 #llmInfo .badt{color:var(--err)}
 .item .edit .lab { font-size: 11px; opacity: 0.7; min-width: 74px; align-self: center; }
+.plot .refrow{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);margin-top:4px}
+.plot .refrow i{display:inline-block;width:14px;flex:none}
+.plot .refrow span{flex:1}
+.mini{font-size:10px;padding:2px 6px}
+.plot label.mini{display:inline-block;margin-top:6px;cursor:pointer}

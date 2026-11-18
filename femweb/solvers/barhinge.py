@@ -597,7 +597,12 @@ def solve(model, spec, progress=None):
         msgs.append("호장법은 하중과 변위를 함께 조절하므로 변위 제어 설정은 쓰지 않았습니다")
     n = max(1, int(st.get("increments", 25)))
     n0 = len(model.nodes)
-    imp = float(st.get("imperfection") or 0)
+    from ..spec import imperfections
+
+    imps = imperfections(st)
+    imp = next((v for k, v in imps if k == 1), 0.0)
+    if any(k > 1 for k, _ in imps):
+        msgs.append("바-힌지 솔버는 1차 좌굴 모드 결함만 씁니다. 2차 이상은 뺐습니다")
     if imp > 0:
         tr, info = build(model, orig)
         tb = bc_table(model, orig)

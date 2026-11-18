@@ -136,6 +136,7 @@ def split_clauses(text):
     t = re.sub(r"(?<![A-Za-z])([xyzXYZ])\s+and\s+(?=[xyzXYZ](?![A-Za-z]))", "\\1\x01", t)
     t = re.sub(r"(\d)\s*,\s*(?=[-+]?\d)", "\\1\x01", t)
     t = re.sub(r",\s*(?=각도|angle)", " ", t)
+    t = re.sub(r",\s*(?=\d+\s*차)", "\x01 ", t)
     t = re.sub(r"[^\s,]+\s*(?:말고|대신에?|이?\s*아니라|이?\s*아니고)\s+", "", t)
     parts = re.split(r"[\n;]|,|(?<!\d)\.(?!\d)|\s그리고\s|\s또한\s|\s또\s|\sand then\s|\sthen\s|\sand\s|(?<=하고)\s+(?!나머지)|(?<=고정|구속|지지)\s+(?=(?:왼|오른|좌측|우측|우단|좌단|위|윗|아래|아랫|상단|하단|상부|하부|바닥|꼭대기|끝|자유단|반대|중앙|가운데|양단|양쪽|테두리|[+-]?[xyzXYZ]\s*(?:최|=|가\s|좌표|[+-]))\S*\s+\S)|(?<=잡고)\s+|(?<=막고)\s+|(?<=주고)\s+|(?<=걸고)\s+|(?<=넣고)\s+|(?<=키고)\s+|(?<=한 뒤)\s+|(?<=한 후)\s+|\s후에\s|한\s*다음에?\s", t)
     return [p.replace("\x01", ",").strip() for p in parts if p and p.strip()]
@@ -805,6 +806,31 @@ def parse_clause(text, model, spec, ctx):
         c.takeall(r"실행|돌려|돌리|시작|수행|ㄱㄱ|고고|(?<![a-z])(?:run|solve|go)(?![a-z])|풀어|계산|시뮬레이션|simulation")
 
     st = {}
+    if c.has(r"결함|불완전|imperfection") and c.has(r"\d+\s*차|모드\s*\d+\s*(?:,|~|-|에|번)|modes?\s*\d+\s*(?:,|~|-)"):
+        pairs = []
+        while True:
+            m = c.take(r"(\d+)\s*차\s*(?:좌굴)?\s*(?:모드)?\s*(?:는|은|에|=|:)?\s*" + NUM + r"\s*(?:mm)?")
+            if not m:
+                break
+            pairs.append([int(m.group(1)), _f(m, 2)])
+        if not pairs:
+            m = c.take(r"(?:모드|modes?)\s*(\d+(?:\s*(?:,|~|-)\s*\d+)*)\s*(?:번)?\s*(?:에|에는|에서)?\s*(?:각각|respectively)?\s*((?:" + NUM[1:-1] + r")(?:\s*,?\s*(?:" + NUM[1:-1] + r"))*)\s*(?:mm)?")
+            if m:
+                ns = []
+                for part in re.split(r"\s*,\s*", m.group(1)):
+                    if re.search(r"[~-]", part):
+                        a, b = (int(x) for x in re.split(r"\s*[~-]\s*", part))
+                        ns += list(range(a, b + 1))
+                    else:
+                        ns.append(int(part))
+                vs = [float(x) for x in re.findall(NUM, m.group(2))]
+                if len(vs) == 1:
+                    vs = vs * len(ns)
+                pairs = [[n, v] for n, v in zip(ns, vs)]
+        if pairs:
+            c.takeall(r"초기\s*결함|초기\s*불완전|결함|imperfection|좌굴|모드|각각|으로|로|을|를|줘|넣어|합|더해|조합|에")
+            st["imperfection_modes"] = pairs
+            st["imperfection"] = 0.0
     if c.take(r"(?:선형\s*|고유치\s*)?좌굴\s*(?:계수|하중|모드)?|buckl(?:e|ing)"):
         st["type"] = "buckle"
     elif c.take(r"모달|모드\s*해석|고유\s*진동수?|진동\s*해석|고유치|고유\s*모드|modal|eigen\s*frequenc(?:y|ies)|natural frequenc(?:y|ies)|frequency analysis|(?<![a-z])frequency(?![a-z])"):
@@ -1482,8 +1508,10 @@ def describe_op(o):
         if "nlgeom" in o:
             s.append("기하비선형 " + ("켬" if o["nlgeom"] else "끔"))
         for a, b in (("increments", "증분"), ("modes", "모드"), ("imperfection", "초기결함")):
-            if a in o:
+            if a in o and not (a == "imperfection" and o.get("imperfection_modes")):
                 s.append(f"{b} {o[a]:g}")
+        if o.get("imperfection_modes"):
+            s.append("초기결함 " + " + ".join(f"{n}차 모드 x {v:g} mm" for n, v in o["imperfection_modes"]))
         if "control" in o:
             s.append("변위 제어" if o["control"] == "displacement" else "하중 제어")
         if o.get("control_disp"):

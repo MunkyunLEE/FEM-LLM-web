@@ -35,6 +35,8 @@
 - 솔리드 모멘트·회전: `loads.distributed_moment`(면 모멘트 → 합력 0 절점 힘), `spec.solid_rotations`(솔리드 면 회전 구속 → 자동 기준점 `cp_<bcid>`), TensorMesh `_coupled_linear`. 시험 `tests/test_solid_coupling.py`
 - 대칭: `xsymm/ysymm/zsymm`, 반대칭 `xasymm/yasymm/zasymm`. CalculiX 쉘은 병진 성분만 구속
 - 강체 부품: 그룹 전체를 기준점에 묶기(`add_coupling` `rigid`) 또는 강체 접촉면(`add_contact` `shape: "mesh"`, `body`). 후자는 `contact.split_rigid` 가 부품을 빼고 선택을 절점 목록으로 바꾼 뒤 IPC 장애물로 넘김(자체 쉘만). 시험 `tests/test_rigid_part.py`
+- Abaqus 내보내기 `femweb/abaqus.py`(`export(model, spec, info)`, info 는 자체 쉘 결과 `res.abaqus`: 결함 좌표·α·β·스텝 시간), 비교 곡선 `femweb/compare.py`(`parse`, `metrics`), 서버 `S["refs"]`, `/api/refs`. 시험 `tests/test_abaqus.py`
+- 초기 결함: `spec.imperfections(step)` → `[[모드, mm], ...]` (`imperfection_modes` 우선, 없으면 `imperfection` 을 1차로). 모드는 최대 성분 +1 정규화
 - 진행 표시: `femweb/progress.py` (`context`, `stage`, `detail`), 서버 `GET /api/progress`
 - 환경 변수: `FEMWEB_DEVICE`(cpu/cuda/mps/auto), `FEMWEB_HESS`(float32/float64), `FEMWEB_THREADS`
 

@@ -25,7 +25,7 @@ EXAMPLES = os.path.join(ROOT, "examples")
 
 app = FastAPI(title="FEM-LLM-web")
 lock = threading.Lock()
-S = {"base": None, "spec": None, "result": None, "stale": False, "chat": [], "llm": dict(llm.DEFAULTS), "cache": {}, "solve_time": None, "undo": [], "eff": (None, None)}
+S = {"base": None, "spec": None, "result": None, "stale": False, "chat": [], "llm": dict(llm.DEFAULTS), "cache": {}, "solve_time": None, "undo": [], "eff": (None, None), "refs": []}
 
 
 def fail(msg, code=400):
@@ -128,6 +128,7 @@ def set_model(base, spec=None):
     S["cache"] = {}
     S["chat"] = []
     S["solve_time"] = None
+    S["refs"] = []
 
 
 def load_file(name, data, size=None):
@@ -556,12 +557,84 @@ def get_plots():
         out = []
         if not S["result"]:
             return out
+        from . import compare
+
         for p in S["spec"]["plots"]:
             try:
-                out.append(plots.evaluate(p, S["result"], active()))
+                q = plots.evaluate(p, S["result"], active())
+                q["refs"] = []
+                for r in S["refs"]:
+                    if r["plot"] != p["id"]:
+                        continue
+                    k = min(int(r.get("series", 0)), len(q["series"]) - 1)
+                    xr = [v * r["sx"] for v in r["x"]]
+                    yr = [v * r["sy"] for v in r["y"]]
+                    met = compare.metrics(q["series"][k]["x"], q["series"][k]["y"], xr, yr) if k >= 0 else {"overlap": None}
+                    q["refs"].append({"id": r["id"], "name": r["name"], "x": xr, "y": yr, "series": k, "against": q["series"][k]["name"] if k >= 0 else "", "sx": r["sx"], "sy": r["sy"], "flipped": r.get("flipped", False), "metrics": met})
+                out.append(q)
             except Exception as e:
-                out.append({"id": p["id"], "title": p.get("title", "그래프"), "error": str(e), "series": []})
+                out.append({"id": p["id"], "title": p.get("title", "그래프"), "error": str(e), "series": [], "refs": []})
         return out
+
+
+class RefIn(BaseModel):
+    plot: str
+    text: str
+    name: str = "Abaqus"
+    series: int = 0
+
+
+class RefUpd(BaseModel):
+    id: str
+    sx: float | None = None
+    sy: float | None = None
+    series: int | None = None
+    remove: bool = False
+
+
+@app.post("/api/refs")
+def add_ref(body: RefIn):
+    with lock:
+        need_model()
+        from . import compare
+
+        if body.plot not in [p["id"] for p in S["spec"]["plots"]]:
+            fail("그래프가 없습니다", 404)
+        try:
+            curves = compare.parse(body.text, body.name)
+        except Exception as e:
+            fail(e)
+        own = None
+        if S["result"]:
+            try:
+                q = plots.evaluate(next(p for p in S["spec"]["plots"] if p["id"] == body.plot), S["result"], active())
+                own = q["series"][min(body.series, len(q["series"]) - 1)]["y"] if q["series"] else None
+            except Exception:
+                own = None
+        made = []
+        for c in curves:
+            sy = compare.auto_sign(own, c["y"]) if own else 1.0
+            n = 1 + max([int(r["id"][3:]) for r in S["refs"]] or [0])
+            r = {"id": f"ref{n}", "plot": body.plot, "name": c["name"], "x": c["x"], "y": c["y"], "sx": 1.0, "sy": sy, "series": body.series, "flipped": sy < 0}
+            S["refs"].append(r)
+            made.append({"id": r["id"], "name": r["name"], "points": len(r["x"]), "flipped": r["flipped"]})
+        return made
+
+
+@app.post("/api/refs/update")
+def update_ref(body: RefUpd):
+    with lock:
+        r = next((x for x in S["refs"] if x["id"] == body.id), None)
+        if r is None:
+            fail("비교 곡선이 없습니다", 404)
+        if body.remove:
+            S["refs"].remove(r)
+            return {"ok": True}
+        for k in ("sx", "sy", "series"):
+            v = getattr(body, k)
+            if v is not None:
+                r[k] = v
+        return {"ok": True}
 
 
 class LLMCfg(BaseModel):
@@ -610,6 +683,21 @@ def export_inp():
         except Exception as e:
             fail(e)
         return PlainTextResponse(text, headers={"Content-Disposition": "attachment; filename=job.inp"})
+
+
+@app.get("/api/export/abaqus")
+def export_abaqus(element: str = "S4R"):
+    with lock:
+        need_model()
+        from . import abaqus
+
+        res = S.get("result")
+        info = getattr(res, "abaqus", None) if res is not None and not S.get("stale") else None
+        try:
+            text, notes = abaqus.export(active(), S["spec"], info=info, element=element if element in ("S4R", "S4") else "S4R")
+        except Exception as e:
+            fail(e)
+        return PlainTextResponse(text, headers={"Content-Disposition": "attachment; filename=job_abaqus.inp"})
 
 
 @app.get("/api/export/spec")

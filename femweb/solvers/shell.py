@@ -1204,7 +1204,7 @@ def linear_buckling(sh, fixed, pres, pval, f, k=1):
         m = np.zeros(sh.ndof)
         m[fr] = vecs[:, j]
         m = m[: sh.nx].reshape(-1, 3)
-        out.append((1.0 / vals[j], m / np.abs(m).max()))
+        out.append((1.0 / vals[j], m / m.ravel()[np.argmax(np.abs(m))]))
     if not out:
         return None, None
     return [o[0] for o in out], [o[1] for o in out]
@@ -1292,6 +1292,10 @@ def solve(model, spec, progress=None, checkpoint=None, resume=None, every=300.0)
         tmax = max((float(section_for(spec, g)["thickness"]) for g in set(model.shell_group)), default=0.0)
         sub, sp, used = split_rigid(model, spec, 0.75 * tmax)
         res = _solve_model(sub, sp, progress, checkpoint, resume, every)
+        if used is not None and getattr(res, "abaqus", None):
+            Xf = np.asarray(model.nodes, float).copy()
+            Xf[used] = res.abaqus["X"]
+            res.abaqus["X"] = Xf
         if used is not None:
             res.summary.setdefault("참고", [])
             res.summary["참고"].append(f"강체 부품 {', '.join(c['id'] for c in sp['contacts'] if c.get('shape') == 'mesh')}: 해석 모델에서 빼고 이동하는 강체 접촉면으로 썼습니다 (닫힌 부품은 면을 두께 절반+장벽 범위만큼 안쪽으로 옮김). 결과 절점은 변형체 {len(used)}개입니다")
@@ -1402,7 +1406,10 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
     F, M, _ = lumped(model, spec)
     if np.abs(M).sum() > 0 and not quad:
         msgs.append("모멘트 하중은 삼각형 요소에서 무시했습니다 (사각형 요소는 지원)")
-    imp = float(st.get("imperfection") or 0)
+    from ..spec import imperfections
+
+    imps = imperfections(st)
+    imp = max([abs(v) for _, v in imps] or [0.0])
     if ck is not None:
         X = np.asarray(ck["X"], float)
         imp = 0.0
@@ -1433,10 +1440,17 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
                 lat = [3 * int(i) + c for i in top for c in range(3) if c != ax]
                 fx0 = np.array(sorted(set(fx0.tolist()) | set(lat)), int)
                 msgs.append(f"초기 결함 모드는 강체 판이 처음 닿는 끝단 절점 {len(top)}개에 판 이동 방향 하중을 걸고 그 절점의 옆 방향을 막은 선형 좌굴로 구했습니다")
-        fac, modes = linear_buckling(sh0, fx0, pd, pv, f0, k=1)
+        kmax = max(n for n, _ in imps)
+        fac, modes = linear_buckling(sh0, fx0, pd, pv, f0, k=kmax)
         if modes:
-            X = X + imp * modes[0]
-            msgs.append(f"초기 결함: 1차 좌굴 모드(선형 좌굴 계수 {fac[0]:.5g}) x {imp:g} mm")
+            parts_txt = []
+            for n, v in imps:
+                if n > len(modes):
+                    msgs.append(f"초기 결함: {n}차 모드를 구하지 못해 뺐습니다 (구한 모드 {len(modes)}개)")
+                    continue
+                X = X + v * modes[n - 1]
+                parts_txt.append(f"{n}차(계수 {fac[n - 1]:.5g}) x {v:g} mm")
+            msgs.append("초기 결함: 선형 좌굴 모드 " + " + ".join(parts_txt) + (" (각 모드는 최대 변위 1 로 정규화)" if len(parts_txt) > 1 else ""))
         else:
             msgs.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다")
     sh = make(X, ptable)
@@ -1563,6 +1577,9 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
     amp = _amp(st.get("amplitude", "linear"))
     res = Result("shell", "static")
     res.nodes = X.copy()
+    res.abaqus = {"X": X.copy(), "imperfection": imps, "time": total_time}
+    if dmp is not None:
+        res.abaqus.update(alpha=float(al), beta=float(be), f1=float(w[0] / 2 / np.pi), f2=float(w[1] / 2 / np.pi))
     res.tris = T
     fe = set()
     for f in model.shells:

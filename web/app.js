@@ -931,6 +931,45 @@ function renderSummary() {
 }
 
 const COLORS = ['#4cc2ff', '#ff5fa8', '#57d9a3', '#ffc857', '#c792ea', '#ff8a5c'];
+const REFC = ['#ffffff', '#b0bec5', '#ffd54f', '#80cbc4'];
+
+function refRow(r, k) {
+  const row = el('div', 'refrow');
+  const sw = el('i');
+  sw.style.borderTop = `2px dashed ${REFC[k % REFC.length]}`;
+  const m = r.metrics || {};
+  const pct = (v) => (v === null || v === undefined ? '-' : `${(v * 100).toFixed(1)}%`);
+  const rat = (v) => (v === null || v === undefined ? '-' : `${v.toFixed(3)}배`);
+  const txt = m.overlap ? `${r.name} 대비 ${r.against}: 최대값 ${rat(m.peak_ratio)}, 평균 ${rat(m.mean_ratio)}, RMS 차이 ${pct(m.rms)}, 최대 차이 ${pct(m.max_diff)} (구간 ${fmt(m.overlap[0])}~${fmt(m.overlap[1])})` : `${r.name}: 겹치는 X 구간이 없습니다`;
+  const flip = el('button', 'mini', r.sy < 0 ? '부호 ×(−1)' : '부호 ×(+1)');
+  flip.title = r.flipped ? '자체 결과와 부호가 반대라 자동으로 뒤집었습니다' : '';
+  flip.onclick = async () => { await api('/api/refs/update', { json: { id: r.id, sy: -r.sy } }); loadPlots(); };
+  const del = el('button', 'mini', '삭제');
+  del.onclick = async () => { await api('/api/refs/update', { json: { id: r.id, remove: true } }); loadPlots(); };
+  row.append(sw, el('span', '', txt), flip, del);
+  return row;
+}
+
+function refUpload(p) {
+  const lab = el('label', 'mini btn ghost', 'Abaqus 곡선 겹치기');
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.csv,.rpt,.txt,.dat';
+  inp.style.display = 'none';
+  inp.onchange = async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    const text = await f.text();
+    try {
+      await api('/api/refs', { json: { plot: p.id, text, name: f.name.replace(/\.[^.]+$/, '') } });
+    } catch (e) {
+      alert(e.message || e);
+    }
+    loadPlots();
+  };
+  lab.append(inp);
+  return lab;
+}
 function chart(p) {
   const W = 420;
   const H = 230;
@@ -942,7 +981,7 @@ function chart(p) {
   let x1 = -Infinity;
   let y0 = Infinity;
   let y1 = -Infinity;
-  for (const s of p.series) {
+  for (const s of p.series.concat(p.refs || [])) {
     for (const v of s.x) {
       x0 = Math.min(x0, v);
       x1 = Math.max(x1, v);
@@ -983,6 +1022,10 @@ function chart(p) {
     mk('polyline', { points: pts, fill: 'none', stroke: COLORS[k % COLORS.length], 'stroke-width': 1.8 });
     if (s.x.length <= 40) s.x.forEach((v, i) => mk('circle', { cx: X(v), cy: Y(s.y[i]), r: 2.2, fill: COLORS[k % COLORS.length] }));
   });
+  (p.refs || []).forEach((s, k) => {
+    const pts = s.x.map((v, i) => `${X(v).toFixed(1)},${Y(s.y[i]).toFixed(1)}`).join(' ');
+    mk('polyline', { points: pts, fill: 'none', stroke: REFC[k % REFC.length], 'stroke-width': 1.8, 'stroke-dasharray': '5 3' });
+  });
   return svg;
 }
 
@@ -1014,6 +1057,8 @@ async function loadPlots() {
         lg.append(sp);
       });
       d.append(lg);
+      (p.refs || []).forEach((r, k) => d.append(refRow(r, k)));
+      d.append(refUpload(p));
     }
     box.append(d);
   }

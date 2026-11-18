@@ -32,9 +32,17 @@ def default_spec(model=None):
         "loads": [],
         "contacts": [],
         "couplings": [],
-        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "element": "auto", "device": "auto", "precision": "auto", "threads": 0, "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
+        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "imperfection_modes": [], "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "element": "auto", "device": "auto", "precision": "auto", "threads": 0, "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
         "plots": [],
     }
+
+
+def imperfections(st):
+    lst = [[int(n), float(v)] for n, v in (st.get("imperfection_modes") or []) if float(v) != 0.0]
+    if lst:
+        return lst
+    imp = float(st.get("imperfection") or 0.0)
+    return [[1, imp]] if imp > 0 else []
 
 
 def section_for(spec, group):
@@ -379,6 +387,16 @@ def apply_ops(spec, ops, model=None):
                     st[f] = max(1, int(op[f]))
             if "imperfection" in op:
                 st["imperfection"] = _num(op["imperfection"], "imperfection")
+                if "imperfection_modes" not in op:
+                    st["imperfection_modes"] = []
+            if "imperfection_modes" in op:
+                lst = []
+                for it in op["imperfection_modes"] or []:
+                    n, v = int(it[0]), _num(it[1], "imperfection_modes")
+                    if n < 1 or n > 50:
+                        raise ValueError("결함 모드 번호는 1~50 이어야 합니다")
+                    lst.append([n, v])
+                st["imperfection_modes"] = lst
             if "control" in op:
                 c = str(op["control"] or "load").lower()
                 if c not in ("load", "displacement"):

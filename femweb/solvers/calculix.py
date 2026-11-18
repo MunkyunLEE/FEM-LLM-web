@@ -714,29 +714,29 @@ def _freqs(dat):
     return out
 
 
-def buckle_mode(model, base, spec):
+def buckle_mode(model, base, spec, k=1):
     sp = dict(spec)
     sp["step"] = dict(spec["step"])
     sp["step"].pop("control", None)
     if not sp["loads"]:
         return None
     try:
-        inp, _, _ = build_inp(model, base, sp, step={"type": "buckle", "modes": 1}, out2d=True)
+        inp, _, _ = build_inp(model, base, sp, step={"type": "buckle", "modes": max(1, int(k))}, out2d=True)
         frd, dat, _ = run_ccx(inp)
         _, _, blocks = parse_frd(frd)
     except Exception:
         return None
     disp = [b for b in blocks if b["name"].startswith("DISP")]
-    if not disp:
-        return None
-    b = disp[-1]
-    mode = np.zeros((len(model.nodes), 3))
-    ok = b["ids"] <= len(model.nodes)
-    mode[b["ids"][ok] - 1] = b["values"][ok][:, :3]
-    mx = np.abs(mode).max()
-    if not np.isfinite(mx) or mx <= 0:
-        return None
-    return mode / mx
+    out = []
+    for b in disp[-max(1, int(k)) :]:
+        mode = np.zeros((len(model.nodes), 3))
+        ok = b["ids"] <= len(model.nodes)
+        mode[b["ids"][ok] - 1] = b["values"][ok][:, :3]
+        mx = np.abs(mode).max()
+        if not np.isfinite(mx) or mx <= 0:
+            break
+        out.append(mode / mode.ravel()[np.argmax(np.abs(mode))])
+    return out or None
 
 
 def solve(model, base, spec, progress=None):
@@ -772,11 +772,21 @@ def solve(model, base, spec, progress=None):
         ref_load = net if net > 1e-9 else float(np.linalg.norm(F, axis=1).sum()) / 2
         if ref_load <= 1e-9:
             raise ValueError("좌굴 해석에는 기준이 되는 압축 하중이 필요합니다. 하중(힘 또는 압력)을 먼저 추가하세요")
-    if kind == "static" and nlg and float(st.get("imperfection") or 0) > 0:
-        mode = buckle_mode(model, base, orig)
-        if mode is not None:
-            perturb = mode * float(st["imperfection"])
-            notes.append(f"초기 결함: 1차 좌굴 모드 x {float(st['imperfection']):g} mm")
+    from ..spec import imperfections
+
+    imps = imperfections(st)
+    if kind == "static" and nlg and imps:
+        modes = buckle_mode(model, base, orig, k=max(n for n, _ in imps))
+        if modes:
+            perturb = np.zeros((len(model.nodes), 3))
+            used = []
+            for n, v in imps:
+                if n <= len(modes):
+                    perturb += v * modes[n - 1]
+                    used.append(f"{n}차 x {v:g} mm")
+                else:
+                    notes.append(f"초기 결함: {n}차 모드를 구하지 못해 뺐습니다")
+            notes.append("초기 결함: 좌굴 모드 " + " + ".join(used))
         else:
             notes.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다")
     inp, n2, meta = build_inp(model, base, spec, step=step, perturb=perturb, ctl=ctl)

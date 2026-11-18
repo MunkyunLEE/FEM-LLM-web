@@ -200,15 +200,18 @@ def solve(model, spec, progress=None):
     if has_contact and not st.get("nlgeom"):
         st["nlgeom"] = True
         pre_notes.append("접촉이 있어 비선형(Neo-Hookean) 경로로 풀었습니다")
-    imp = float(st.get("imperfection") or 0)
-    if st.get("nlgeom") and imp > 0:
+    from ..spec import imperfections
+
+    imps = imperfections(st)
+    if st.get("nlgeom") and imps:
         from . import calculix
 
-        mode = calculix.buckle_mode(model, model, orig) if calculix.find_ccx() else None
-        if mode is not None:
+        modes = calculix.buckle_mode(model, model, orig, k=max(n for n, _ in imps)) if calculix.find_ccx() else None
+        if modes:
             model = model.copy()
-            model.nodes = model.nodes + mode * imp
-            pre_notes.append(f"초기 결함: 1차 좌굴 모드(CalculiX로 계산) x {imp:g} mm")
+            use = [(n, v) for n, v in imps if n <= len(modes)]
+            model.nodes = model.nodes + sum(v * modes[n - 1] for n, v in use)
+            pre_notes.append("초기 결함: 좌굴 모드(CalculiX로 계산) " + " + ".join(f"{n}차 x {v:g} mm" for n, v in use))
         else:
             pre_notes.append("초기 결함용 좌굴 모드를 구하지 못해 결함 없이 풀었습니다 (CalculiX 필요)")
     mat = spec["materials"].get(spec["sections"]["*"].get("material", "default"), spec["materials"]["default"])
