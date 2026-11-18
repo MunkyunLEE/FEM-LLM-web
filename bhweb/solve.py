@@ -102,6 +102,17 @@ def _residual(pb, x, st, lam, need_K=True):
     return T, K, out, cinfo
 
 
+def _potential(pb, x, st, lam):
+    _, _, out = evaluate(pb.m, pb.asm, x, st, False, lam, pb.dth0)
+    e = float(out["Ub"].sum() + out["wpb"].sum())
+    if "Uh" in out:
+        e += float(out["Uh"].sum() + out["wph"].sum())
+    if pb.contact is not None:
+        e += pb.contact.terms(x, False)[2]["energy"]
+    e -= lam * float(pb.F @ (x - pb.m.X).ravel())
+    return e
+
+
 def _set_prescribed(pb, x, lam):
     u = (x - pb.m.X).ravel()
     u[pb.pres] = lam * pb.up[pb.pres]
@@ -156,9 +167,16 @@ def solve_displacement(m, pb=None, steps=50, tol=1e-8, kmax=30, beta_min=1e-4, c
             xn = xi.ravel().copy()
             xn[pb.free] += step
             if pb.contact is not None:
-                a = pb.contact.stepsize(xi, xn.reshape(-1, 3))
-                if a < 1.0:
-                    xn = xi.ravel() + 0.8 * a * (xn - xi.ravel())
+                a = min(1.0, 0.9 * pb.contact.stepsize(xi, xn.reshape(-1, 3)))
+                e0 = _potential(pb, xi, st, lam1)
+                slope = float(Rf @ step)
+                for _ in range(30):
+                    xt = xi.ravel() + a * (xn - xi.ravel())
+                    if _potential(pb, xt.reshape(-1, 3), st, lam1) <= e0 + 1e-4 * a * slope + 1e-14 * abs(e0):
+                        break
+                    a *= 0.5
+                step = a * step
+                xn = xi.ravel() + a * (xn - xi.ravel())
             xi = xn.reshape(-1, 3)
             ref = max(float(np.abs(xi - m.X).max()), float(np.abs(m.X).max()) * 1e-6, 1e-12)
             rn = float(np.abs(Rf).max()) if len(Rf) else 0.0
@@ -171,6 +189,8 @@ def solve_displacement(m, pb=None, steps=50, tol=1e-8, kmax=30, beta_min=1e-4, c
         if ok:
             T, _, out, ci = _residual(pb, xi, st, lam1, False)
             st = commit(st, out)
+            if pb.contact is not None:
+                pb.contact.commit(xi)
             v_prev = (xi.ravel() - x.ravel()) / h
             x = xi
             lam = lam1
@@ -258,6 +278,8 @@ def solve_force(m, pb=None, increments=100, dlam=0.05, tol=1e-8, kmax=30, lam_ma
         du_hat_prev = dh1
         T, _, out, ci = _residual(pb, xi.reshape(-1, 3), st, lam_i, False)
         st = commit(st, out)
+        if pb.contact is not None:
+            pb.contact.commit(xi)
         x = xi.reshape(-1, 3)
         lam = lam_i
         rec.add(lam, x, st, out, T, k, ci)
