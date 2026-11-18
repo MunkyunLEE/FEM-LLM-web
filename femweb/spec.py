@@ -1,9 +1,9 @@
 import copy
 from .select import resolve
 
-SOLVERS = ("calculix", "barhinge", "tensormesh", "shell")
+SOLVERS = ("calculix", "barhinge", "tensormesh", "shell", "bh")
 DAMPING = ("none", "mass", "stiffness", "rayleigh", "direct")
-STEP_TYPES = ("static", "buckle", "modal", "arclength")
+STEP_TYPES = ("static", "buckle", "modal", "arclength", "kinematic")
 BC_TYPES = {
     "fixed": [1, 2, 3, 4, 5, 6],
     "pinned": [1, 2, 3],
@@ -28,6 +28,8 @@ def default_spec(model=None):
         "sections": {"*": {"material": "default", "thickness": 1.0, "beam": {"shape": "rect", "b": 10.0, "h": 10.0}}},
         "hinges": {"*": {"kappa": None, "ratio": 0.1}},
         "hinge_auto": {"mode": "off", "angle": 5.0},
+        "creases": {},
+        "bh": {},
         "bcs": [],
         "loads": [],
         "contacts": [],
@@ -124,6 +126,8 @@ def _coupling_fields(item, op, model, merge=False):
 def apply_ops(spec, ops, model=None):
     spec = copy.deepcopy(spec)
     spec.setdefault("contacts", [])
+    spec.setdefault("creases", {})
+    spec.setdefault("bh", {})
     spec["step"].setdefault("amplitude", "linear")
     spec["step"].setdefault("element", "auto")
     spec["step"].setdefault("damping", {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0})
@@ -364,6 +368,52 @@ def apply_ops(spec, ops, model=None):
                 if h["pin"]:
                     h["kappa"] = None
             log.append(f"힌지 {g}")
+        elif k == "set_crease":
+            ty = str(op.get("type", "auto"))
+            if ty not in ("fold", "bend", "cut", "auto"):
+                raise ValueError("주름 종류는 fold, bend, cut, auto 중 하나여야 합니다")
+            es = op.get("edges") or []
+            if not es:
+                raise ValueError("바꿀 엣지가 없습니다")
+            cr = dict(spec.get("creases") or {})
+            known = set(model.shell_edges().keys()) if model is not None and hasattr(model, "shell_edges") else None
+            n = 0
+            for e in es:
+                a, b = sorted(int(v) for v in e)
+                if known is not None and (a, b) not in known:
+                    raise ValueError(f"모델에 없는 엣지입니다: {a}-{b}")
+                key = f"{a}-{b}"
+                if ty == "auto":
+                    cr.pop(key, None)
+                else:
+                    cr[key] = ty
+                n += 1
+            spec["creases"] = cr
+            log.append(f"주름 {n}개 → {ty}")
+        elif k == "set_bh":
+            cur = dict(spec.get("bh") or {})
+            for f in ("fold_mode", "Lstar", "Lstar_ratio", "fold_percent", "fold_k", "long_factor", "bar_yield", "bar_H", "fold_yield", "fold_H", "bend_yield", "bend_H", "contact", "gap", "tol", "rest", "drivers", "targets", "plot3", "watch"):
+                if f not in op:
+                    continue
+                v = op[f]
+                if f == "fold_mode":
+                    if v not in ("auto", "percent", "value"):
+                        raise ValueError("fold_mode 는 auto, percent, value 중 하나여야 합니다")
+                elif f == "contact":
+                    v = bool(v)
+                elif f in ("rest",):
+                    v = {str(kk): float(vv) for kk, vv in (v or {}).items()}
+                elif f in ("drivers", "plot3", "watch"):
+                    v = [("%d-%d" % tuple(sorted(int(q) for q in e))) if not isinstance(e, str) else e for e in (v or [])]
+                elif f == "targets":
+                    v = [float(q) for q in (v or [])]
+                elif v is not None:
+                    v = _num(v, f)
+                    if v < 0:
+                        raise ValueError(f"{f} 는 0 이상이어야 합니다")
+                cur[f] = v
+            spec["bh"] = cur
+            log.append("BH 설정")
         elif k == "auto_hinge":
             mode = str(op.get("mode", "auto")).lower()
             if mode not in ("off", "auto", "groups", "crease", "all"):

@@ -47,7 +47,7 @@ def eff_base():
 
 def active():
     base, spec = eff_base(), S["spec"]
-    if base.kind != "obj" or spec["solver"] == "barhinge":
+    if base.kind != "obj" or spec["solver"] in ("barhinge", "bh"):
         return base
     k = int(spec["divisions"])
     if k not in S["cache"]:
@@ -347,6 +347,12 @@ def _solve_with(m, base, spec, progress=None):
         from .solvers import barhinge
 
         return barhinge.solve(base, spec)
+    if spec["solver"] == "bh":
+        if base.kind != "obj":
+            raise ValueError("BH-web 솔버는 OBJ 삼각형·사각형 패널 모델에만 쓸 수 있습니다")
+        from .solvers import bh
+
+        return bh.solve(base, spec, progress=progress)
     if spec["solver"] == "shell":
         from .solvers import shell
 
@@ -493,6 +499,29 @@ def cancel_solve():
 @app.post("/api/cancel/llm")
 def cancel_llm():
     return {"cancelled": llm.cancel()}
+
+
+@app.get("/api/creases")
+def get_creases():
+    with lock:
+        need_model()
+        from .solvers import bh
+
+        if S["base"].kind != "obj" or not S["base"].shells:
+            return {"edges": [], "note": "OBJ 패널 모델이 아닙니다"}
+        try:
+            return bh.crease_view(eff_base(), S["spec"])
+        except Exception as e:
+            fail(e)
+
+
+@app.get("/api/result/kin3d")
+def result_kin3d():
+    with lock:
+        r = S["result"]
+        if not r or not getattr(r, "kin3d", None):
+            return {}
+        return r.kin3d
 
 
 @app.get("/api/result/mesh")
