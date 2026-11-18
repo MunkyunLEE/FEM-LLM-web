@@ -1133,6 +1133,24 @@ def _restore(obj, data):
 
 
 def solve(model, spec, progress=None, checkpoint=None, resume=None, every=300.0):
+    st = spec.get("step", {})
+    want = {"FEMWEB_DEVICE": st.get("device"), "FEMWEB_HESS": st.get("precision"), "FEMWEB_THREADS": st.get("threads")}
+    old = {}
+    for k, v in want.items():
+        if v not in (None, "", "auto", 0):
+            old[k] = os.environ.get(k)
+            os.environ[k] = str(v)
+    try:
+        return _solve_model(model, spec, progress, checkpoint, resume, every)
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every=300.0):
     import pickle
     import time as _time
 
@@ -1272,7 +1290,8 @@ def solve(model, spec, progress=None, checkpoint=None, resume=None, every=300.0)
 
         dv = device()
         pr = os.environ.get("FEMWEB_HESS", "float32" if dv == "mps" else "float64").lower()
-        msgs.append(f"계산 장치: 요소 강성 {dv} {pr}, CPU 스레드 {torch.get_num_threads()}")
+        req = os.environ.get("FEMWEB_DEVICE", "cpu").lower()
+        msgs.append(f"계산 장치: 요소 강성 {dv} {pr}, CPU 스레드 {torch.get_num_threads()}" + (f" ({req} 를 쓸 수 없어 CPU 로 풀었습니다)" if req in ("cuda", "mps") and dv == "cpu" else ""))
     if quad:
         T = sh.tris
         tt = sh.thick

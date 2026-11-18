@@ -127,6 +127,7 @@ OPS:
  {"op":"set_solver","solver":"calculix"|"barhinge"|"tensormesh"|"shell"}   shell = own large-deformation shell solver (OBJ panels, static only); the only one with self-contact and damping
  {"op":"add_contact","type":"self","friction":mu}   self-contact between all shell faces (solver shell only)
  {"op":"set_step","damping":{"kind":"none"|"mass"|"stiffness"|"rayleigh","zeta":percent,"time":seconds},"amplitude":"linear"|"smooth","element":"auto"|"quad"|"tri"}   damping ratio at modes 1 and 2 (solver shell only); time 0 = automatic
+ {"op":"set_step","device":"auto"|"cpu"|"cuda","precision":"auto"|"float64"|"float32","threads":int}   where the shell element stiffness is computed (GPU = cuda), its precision, CPU threads (0 = auto)
  {"op":"set_divisions","divisions":int}
  {"op":"add_plot","title":str,"x":QUANTITY,"series":[QUANTITY,...]}
 QUANTITY: {"quantity": "time"|"frame"|"energy.total"|"energy.bar"|"energy.bend"|"energy.fold"|"reaction.x"|"reaction.y"|"reaction.z"|"u.max"|"vonMises.max"|"fold.mean"|"buckling.factor"|"frequency"|"control.disp"|"control.force"|"contact.disp"|"contact.force"|"contact.normal"|"contact.friction"|"reaction.<bc id>.x|y|z"}   (the last three: solver shell only; nodal fields RF, CFORCE, CPRESS also exist there)

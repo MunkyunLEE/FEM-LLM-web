@@ -379,3 +379,43 @@ def test_checkpoint_resume_matches_uninterrupted(tmp_path):
     for k in ("contact.force", "energy.total", "energy.plastic"):
         assert np.allclose(again.history[k], full.history[k], rtol=1e-6, atol=1e-6)
     assert np.allclose(again.frames[-1]["U"], full.frames[-1]["U"], atol=1e-8)
+
+
+def test_rules_and_spec_compute_device():
+    from femweb import rules
+    from femweb.spec import apply_ops, default_spec
+
+    m = _tube_model()
+    sp = default_spec(m)
+    assert rules.parse("GPU로 계산해줘", m, sp)[0] == [{"op": "set_step", "device": "cuda"}]
+    assert rules.parse("CPU로 풀어줘", m, sp)[0] == [{"op": "set_step", "device": "cpu"}]
+    assert rules.parse("단정밀도로", m, sp)[0] == [{"op": "set_step", "precision": "float32"}]
+    assert rules.parse("스레드 8개", m, sp)[0] == [{"op": "set_step", "threads": 8}]
+    spec, _ = apply_ops(sp, [{"op": "set_step", "device": "cpu", "precision": "float32", "threads": 2}], m)
+    assert (spec["step"]["device"], spec["step"]["precision"], spec["step"]["threads"]) == ("cpu", "float32", 2)
+    with pytest.raises(ValueError):
+        apply_ops(sp, [{"op": "set_step", "device": "tpu"}], m)
+
+
+def test_solve_uses_step_device_settings_and_restores_env(monkeypatch):
+    import os
+    from femweb.io_obj import parse_obj
+    from femweb.spec import apply_ops, default_spec
+    from femweb.solvers import shell_quad as Qd
+
+    monkeypatch.delenv("FEMWEB_HESS", raising=False)
+    X, T = Qd.qgrid(100.0, 10.0, 4, 1)
+    txt = "\n".join([f"v {x:g} {y:g} {z:g}" for x, y, z in X] + [f"f {' '.join(str(i + 1) for i in q)}" for q in T]) + "\n"
+    model = parse_obj(txt, "p.obj")
+    ops = [
+        {"op": "set_solver", "solver": "shell"},
+        {"op": "set_section", "thickness": 1.0},
+        {"op": "add_bc", "type": "fixed", "select": {"plane": {"axis": "x", "at": "min"}}},
+        {"op": "add_load", "type": "force", "vector": [0, 0, -1.0], "select": {"plane": {"axis": "x", "at": "max"}}},
+        {"op": "set_step", "type": "static", "increments": 1, "device": "cuda", "precision": "float32", "threads": 1},
+    ]
+    spec, _ = apply_ops(default_spec(model), ops, model)
+    r = S.solve(model, spec)
+    note = [s for s in r.summary["참고"] if s.startswith("계산 장치")][0]
+    assert "float32" in note and "스레드 1" in note
+    assert "FEMWEB_HESS" not in os.environ

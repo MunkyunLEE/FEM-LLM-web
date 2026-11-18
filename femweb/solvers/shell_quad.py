@@ -25,13 +25,17 @@ def _rot(th, v):
     return v + a * c1 + b * torch.linalg.cross(th, c1, dim=-1)
 
 
+def _mps():
+    return getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
+
+
 def device():
     v = os.environ.get("FEMWEB_DEVICE", "cpu").lower()
     if v == "auto":
-        if torch.cuda.is_available():
-            return "cuda"
-        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-            return "mps"
+        return "cuda" if torch.cuda.is_available() else "mps" if _mps() else "cpu"
+    if v == "cuda" and not torch.cuda.is_available():
+        return "cpu"
+    if v == "mps" and not _mps():
         return "cpu"
     return v
 

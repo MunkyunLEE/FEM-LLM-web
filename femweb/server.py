@@ -95,8 +95,22 @@ def hinge_info():
     return out
 
 
+GPU = {}
+
+
+def gpu():
+    if "name" not in GPU:
+        try:
+            import torch
+
+            GPU["name"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else ("Apple GPU" if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available() else None)
+        except Exception:
+            GPU["name"] = None
+    return GPU["name"]
+
+
 def tools():
-    return {"ccx": calculix.find_ccx(), "tensormesh": has_tm()}
+    return {"ccx": calculix.find_ccx(), "tensormesh": has_tm(), "gpu": gpu()}
 
 
 def llm_public():
@@ -323,7 +337,7 @@ def undo():
         return state(view=True)
 
 
-def _solve_with(m, base, spec):
+def _solve_with(m, base, spec, progress=None):
     if spec["solver"] == "calculix":
         return calculix.solve(m, base, spec)
     if spec["solver"] == "barhinge":
@@ -335,7 +349,7 @@ def _solve_with(m, base, spec):
     if spec["solver"] == "shell":
         from .solvers import shell
 
-        return shell.solve(m, spec)
+        return shell.solve(m, spec, progress=progress)
     if spec["solver"] == "tensormesh":
         from .solvers import solid_tm
 
@@ -348,15 +362,25 @@ def _worker(conn, m, base, spec):
         os.setpgrp()
     except Exception:
         pass
+    t0 = time.time()
+    n = [0]
+
+    def prog(lam):
+        n[0] += 1
+        try:
+            conn.send(("prog", {"lam": float(lam), "inc": n[0], "t": time.time() - t0}))
+        except Exception:
+            pass
+
     try:
-        conn.send(("ok", _solve_with(m, base, spec)))
+        conn.send(("ok", _solve_with(m, base, spec, prog)))
     except BaseException as e:
         conn.send(("err", str(e), traceback.format_exc()))
     finally:
         conn.close()
 
 
-JOB = {"proc": None, "cancelled": False}
+JOB = {"proc": None, "cancelled": False, "t0": None, "prog": None, "info": None}
 
 
 def _kill(proc):
@@ -375,6 +399,11 @@ def run_solver():
     parent, child = ctx.Pipe(duplex=False)
     proc = ctx.Process(target=_worker, args=(child, active(), eff_base(), S["spec"]), daemon=True)
     JOB["cancelled"] = False
+    JOB["t0"] = time.time()
+    JOB["prog"] = None
+    sp = S["spec"]
+    mv = [abs(float(v)) for c in sp.get("contacts") or [] if c.get("type") == "rigid" for v in c.get("motion", [])]
+    JOB["info"] = {"solver": sp["solver"], "increments": int(sp["step"].get("increments") or 0), "travel": max(mv) if mv else (float(sp["step"].get("control_disp") or 0.0) if sp["step"].get("control") == "displacement" else 0.0)}
     proc.start()
     JOB["proc"] = proc
     child.close()
@@ -385,6 +414,9 @@ def run_solver():
                     msg = parent.recv()
                 except EOFError:
                     msg = None
+                if msg is not None and msg[0] == "prog":
+                    JOB["prog"] = msg[1]
+                    continue
                 break
             if not proc.is_alive():
                 msg = parent.recv() if parent.poll(0.5) else None
@@ -401,6 +433,7 @@ def run_solver():
         _kill(proc)
         proc.join(timeout=5)
         JOB["proc"] = None
+        JOB["t0"] = None
         parent.close()
 
 
@@ -418,6 +451,24 @@ def solve():
         S["stale"] = False
         S["solve_time"] = round(time.time() - t, 2)
         return state(view=False)
+
+
+@app.get("/api/progress")
+def progress():
+    t0 = JOB["t0"]
+    if t0 is None:
+        return {"running": False}
+    el = time.time() - t0
+    p = JOB["prog"] or {}
+    info = JOB["info"] or {}
+    lam = float(p.get("lam", 0.0))
+    out = {"running": True, "elapsed": round(el, 1), "solver": info.get("solver"), "lam": lam if p else None, "inc": p.get("inc"), "increments": info.get("increments")}
+    if p and lam > 0.01:
+        rate = lam / max(p["t"], 1e-9)
+        out["eta"] = round(max(0.0, (1.0 - lam) / rate - (el - p["t"])), 0)
+    if p and info.get("travel"):
+        out["disp"] = round(lam * info["travel"], 3)
+    return out
 
 
 @app.post("/api/cancel/solve")

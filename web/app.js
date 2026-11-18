@@ -763,7 +763,7 @@ function renderLists() {
 
 function renderControls() {
   const t = st.tools || {};
-  $('tools').innerHTML = `<b class="${t.ccx ? 'on' : 'off'}">CalculiX ${t.ccx ? '●' : '○'}</b> <b class="${t.tensormesh ? 'on' : 'off'}">TensorMesh ${t.tensormesh ? '●' : '○'}</b>`;
+  $('tools').innerHTML = `<b class="${t.ccx ? 'on' : 'off'}">CalculiX ${t.ccx ? '●' : '○'}</b> <b class="${t.tensormesh ? 'on' : 'off'}">TensorMesh ${t.tensormesh ? '●' : '○'}</b> <b class="${t.gpu ? 'on' : 'off'}" title="${t.gpu || 'GPU 없음'}">GPU ${t.gpu ? '●' : '○'}</b>`;
   if (!st.model) {
     $('modelInfo').textContent = '불러온 모델이 없습니다';
     return;
@@ -780,7 +780,9 @@ function renderControls() {
   $('divisions').value = s.divisions;
   $('divisions').disabled = st.model.kind !== 'obj' || s.solver === 'barhinge';
   $('stepType').value = s.step.type;
-  $('nlgeom').checked = !!s.step.nlgeom;
+  $('nlgeom').checked = !!s.step.nlgeom || s.solver === 'shell';
+  $('nlgeom').disabled = s.solver === 'shell';
+  $('nlgeom').parentElement.title = s.solver === 'shell' ? '자체 쉘 솔버는 항상 기하 비선형으로 풉니다' : '';
   $('increments').value = s.step.increments;
   $('modes').value = s.step.modes;
   $('imperfection').value = s.step.imperfection || 0;
@@ -798,8 +800,11 @@ function renderControls() {
   $('dampTime').value = dm.time || 0;
   $('amplitude').value = s.step.amplitude || 'linear';
   $('element').value = s.step.element || 'auto';
+  $('device').value = s.step.device || 'auto';
+  $('precision').value = s.step.precision || 'auto';
+  $('threads').value = s.step.threads || 0;
   const own = s.solver === 'shell';
-  for (const id of ['dampKind', 'amplitude', 'addSelf', 'element']) $(id).disabled = !own;
+  for (const id of ['dampKind', 'amplitude', 'addSelf', 'element', 'device', 'precision', 'threads']) $(id).disabled = !own;
   $('dampZeta').disabled = !own || dm.kind === 'none';
   $('dampTime').disabled = !own || dm.kind === 'none';
   $('addSelf').disabled = !own || (s.contacts || []).some((c) => c.type === 'self');
@@ -1207,6 +1212,9 @@ function bind() {
   $('dampZeta').onchange = (e) => ops([{ op: 'set_step', damping: { zeta: Math.max(0, +e.target.value || 0) } }]);
   $('dampTime').onchange = (e) => ops([{ op: 'set_step', damping: { time: Math.max(0, +e.target.value || 0) } }]);
   $('element').onchange = (e) => ops([{ op: 'set_step', element: e.target.value }]);
+  $('device').onchange = (e) => ops([{ op: 'set_step', device: e.target.value }]);
+  $('precision').onchange = (e) => ops([{ op: 'set_step', precision: e.target.value }]);
+  $('threads').onchange = (e) => ops([{ op: 'set_step', threads: Math.max(0, Math.round(+e.target.value || 0)) }]);
   $('amplitude').onchange = (e) => ops([{ op: 'set_step', amplitude: e.target.value }]);
   $('addSelf').onclick = () => ops([{ op: 'add_contact', type: 'self', friction: 0 }]);
   $('matE').onchange = (e) => ops([{ op: 'set_material', name: 'default', E: +e.target.value }]);
@@ -1238,6 +1246,25 @@ function bind() {
     b.textContent = '해석 중…';
     $('cancelSolve').hidden = false;
     note('');
+    const tm = (s) => (s >= 3600 ? `${Math.floor(s / 3600)}시간 ${Math.round((s % 3600) / 60)}분` : s >= 60 ? `${Math.floor(s / 60)}분 ${Math.round(s % 60)}초` : `${Math.round(s)}초`);
+    const poll = setInterval(async () => {
+      try {
+        const p = await api('/api/progress');
+        if (!p.running) return;
+        if (p.lam == null) {
+          b.textContent = `해석 중… ${tm(p.elapsed)}`;
+          note(`해석 중 · ${tm(p.elapsed)} 경과`);
+          return;
+        }
+        const pct = (100 * p.lam).toFixed(1);
+        b.textContent = `해석 중… ${pct}%`;
+        const parts = [`진행 ${pct}%`, `증분 ${p.inc}${p.increments ? ` (기본 ${p.increments})` : ''}`];
+        if (p.disp != null) parts.push(`변위 ${p.disp} mm`);
+        parts.push(`${tm(p.elapsed)} 경과`);
+        if (p.eta != null) parts.push(`남은 약 ${tm(p.eta)}`);
+        note(parts.join(' · '));
+      } catch (e) {}
+    }, 1000);
     try {
       const s = await api('/api/solve', { method: 'POST' });
       s.view = st.view;
@@ -1246,6 +1273,7 @@ function bind() {
     } catch (e) {
       note(e.message, true);
     }
+    clearInterval(poll);
     $('cancelSolve').hidden = true;
     b.disabled = false;
     b.textContent = '해석 실행';

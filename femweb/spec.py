@@ -28,7 +28,7 @@ def default_spec(model=None):
         "bcs": [],
         "loads": [],
         "contacts": [],
-        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "element": "auto", "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
+        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "element": "auto", "device": "auto", "precision": "auto", "threads": 0, "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
         "plots": [],
     }
 
@@ -322,6 +322,16 @@ def apply_ops(spec, ops, model=None):
                 if op["element"] not in ("auto", "tri", "quad"):
                     raise ValueError("element 는 auto, tri, quad 중 하나여야 합니다")
                 st["element"] = op["element"]
+            if "device" in op:
+                if op["device"] not in ("auto", "cpu", "cuda", "mps"):
+                    raise ValueError("device 는 auto, cpu, cuda, mps 중 하나여야 합니다")
+                st["device"] = op["device"]
+            if "precision" in op:
+                if op["precision"] not in ("auto", "float64", "float32"):
+                    raise ValueError("precision 은 auto, float64, float32 중 하나여야 합니다")
+                st["precision"] = op["precision"]
+            if "threads" in op:
+                st["threads"] = max(0, int(op["threads"] or 0))
             if "amplitude" in op:
                 if op["amplitude"] not in ("linear", "smooth"):
                     raise ValueError("amplitude 는 linear 또는 smooth 여야 합니다")

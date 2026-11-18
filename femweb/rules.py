@@ -793,6 +793,19 @@ def parse_clause(text, model, spec, ctx):
         st["element"] = "quad"
     elif c.take(r"(?:삼각형|3\s*절점|tri(?:angle)?)\s*(?:쉘|셸)?\s*(?:요소|element)\s*(?:으로|로)?"):
         st["element"] = "tri"
+    if c.take(r"(?<![a-z])(?:gpu|cuda)(?![a-z])\s*(?:로|으로|에서|를|을)?\s*(?:계산|사용|써서|써|풀어)?|그래픽\s*카드\s*(?:로|으로)?|쿠다\s*(?:로|으로)?"):
+        st["device"] = "cuda"
+    elif c.take(r"(?<![a-z])cpu(?![a-z])\s*(?:로|으로|에서|만)?\s*(?:계산|사용|써서|써|풀어)?"):
+        st["device"] = "cpu"
+    elif c.take(r"계산\s*장치\s*(?:를|을)?\s*자동"):
+        st["device"] = "auto"
+    if c.take(r"단정밀도|(?<![a-z])(?:float32|fp32)(?![a-z0-9])"):
+        st["precision"] = "float32"
+    elif c.take(r"배정밀도|(?<![a-z])(?:float64|fp64)(?![a-z0-9])"):
+        st["precision"] = "float64"
+    m = c.take(r"(?:cpu\s*)?(?:스레드|쓰레드|threads?)\s*(?:를|을|는|=)?\s*(\d+)\s*(?:개)?|(\d+)\s*(?:개\s*)?(?:스레드|쓰레드|threads?)")
+    if m:
+        st["threads"] = int(m.group(1) or m.group(2))
     if c.take(r"부드럽게\s*(?:증가|올려|가해)?|S\s*자\s*(?:곡선)?|smooth\s*step|smooth(?:ly)?"):
         st["amplitude"] = "smooth"
     if c.take(r"분기\s*(?:점)?\s*(?:전환|추적|감지|회피)?|가지\s*전환|branch\s*switch(?:ing)?|bifurcation"):
@@ -1383,6 +1396,12 @@ def describe_op(o):
             s.append("쉘 요소 " + {"auto": "자동", "quad": "사각형", "tri": "삼각형"}[o["element"]])
         if o.get("amplitude"):
             s.append("증가 곡선 " + ("S자" if o["amplitude"] == "smooth" else "선형"))
+        if o.get("device"):
+            s.append("계산 장치 " + {"auto": "자동", "cpu": "CPU", "cuda": "GPU (CUDA)", "mps": "GPU (Apple)"}[o["device"]])
+        if o.get("precision"):
+            s.append("강성 정밀도 " + {"auto": "자동", "float64": "배정밀도", "float32": "단정밀도"}[o["precision"]])
+        if "threads" in o:
+            s.append(f"CPU 스레드 {o['threads']}" if o["threads"] else "CPU 스레드 자동")
         return "해석 설정: " + ", ".join(s)
     if k == "set_solver":
         return f"솔버: {o['solver']}"

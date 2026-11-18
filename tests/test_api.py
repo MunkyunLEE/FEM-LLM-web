@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import pytest
 from helpers import ROOT
 from fastapi.testclient import TestClient
@@ -188,3 +189,30 @@ def test_every_example_loads_with_conditions():
     r = c.post("/api/examples/tube_platen?preset=1").json()
     rig = [x for x in r["spec"]["contacts"] if x["type"] == "rigid"]
     assert rig and rig[0]["point"] is not None and abs(rig[0]["point"][2] - 120.5) < 1e-6
+
+
+def test_progress_reports_increments_during_shell_solve():
+    import threading
+
+    pytest.importorskip("ipctk")
+    c.post("/api/examples/tube_crush?preset=1")
+    post_ops([{"op": "set_step", "increments": 6, "control_disp": 1.5}])
+    assert c.get("/api/progress").json() == {"running": False}
+    seen = []
+    done = {}
+
+    def run():
+        done["r"] = c.post("/api/solve")
+
+    th = threading.Thread(target=run)
+    th.start()
+    while th.is_alive():
+        p = c.get("/api/progress").json()
+        if p.get("running") and p.get("inc"):
+            seen.append(p)
+        time.sleep(0.3)
+    th.join()
+    assert done["r"].status_code == 200, done["r"].text
+    assert seen and seen[-1]["inc"] >= 1 and 0 < seen[-1]["lam"] <= 1.0
+    assert seen[-1]["increments"] == 6 and "disp" in seen[-1]
+    assert c.get("/api/progress").json() == {"running": False}
