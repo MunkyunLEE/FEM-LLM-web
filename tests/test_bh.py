@@ -261,10 +261,10 @@ def test_panel_energy_fields_sum_to_totals():
     m = bh.build(server.S["base"], server.S["spec"])
     pm = bh._panel_map(m)
     f = r.frames[-1]["fields"]
-    d = np.zeros(pm["P"])
-    d[pm["pv"]] = f["energyDensity"]
     h = r.history
     tot = h["energy.stretch"][-1] + h["energy.fold"][-1] + h["energy.bend"][-1]
-    assert abs((d * pm["area"]).sum() - tot) < 1e-9 * max(tot, 1)
-    assert len(r.nodes) == len(pm["vid"]) and r.frames[-1]["U"].shape == (len(r.nodes), 3)
+    assert abs(f["energyDensity"] @ pm["va"] - tot) < 1e-9 * max(tot, 1)
+    assert abs((pm["Wb"].T @ pm["va"]) - 1).max() < 1e-9 and abs((pm["Wh"].T @ pm["va"]) - 1).max() < 1e-9
+    assert len(r.nodes) == pm["nv"] and r.frames[-1]["U"].shape == (len(r.nodes), 3)
+    assert f["energyDensity"].std() > 0
     assert "energyDensity" in r.field_names()

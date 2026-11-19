@@ -136,10 +136,16 @@ def _rest(m, c):
     return out
 
 
-PANEL_FIELDS = ("panelEnergy", "energyDensity", "bendDensity", "foldDensity", "stretchDensity", "plasticDensity")
+PANEL_FIELDS = ("energyDensity", "bendDensity", "foldDensity", "stretchDensity", "plasticDensity", "panelEnergy")
 
 
-def _panel_map(m):
+def _seg_dist(P, a, b):
+    d = b - a
+    t = np.clip(((P - a) @ d) / max(float(d @ d), 1e-30), 0.0, 1.0)
+    return np.linalg.norm(P - (a + t[:, None] * d), axis=1)
+
+
+def _panel_map(m, width=0.2, budget=30000):
     from scipy.sparse import csr_matrix
 
     tp = []
@@ -147,58 +153,97 @@ def _panel_map(m):
         tp += [p] * (4 if len(f) == 4 else 1)
     tp = np.array(tp, int)
     P = len(m.faces)
-    sets = [set() for _ in range(P)]
-    for t, p in zip(m.tris, tp):
-        sets[p].update(int(v) for v in t)
     X = m.X
     tr = m.tris
-    ar = 0.5 * np.linalg.norm(np.cross(X[tr[:, 1]] - X[tr[:, 0]], X[tr[:, 2]] - X[tr[:, 0]]), axis=1)
-    area = np.maximum(np.bincount(tp, ar, P), 1e-30)
+    nsub = int(np.clip(np.sqrt(2.0 * budget / max(len(tr), 1)), 1, 8))
+    grid = [(i, j) for i in range(nsub + 1) for j in range(nsub + 1 - i)]
+    gid = {g: q for q, g in enumerate(grid)}
+    sub = []
+    for i in range(nsub):
+        for j in range(nsub - i):
+            sub.append((gid[(i, j)], gid[(i + 1, j)], gid[(i, j + 1)]))
+            if i + j < nsub - 1:
+                sub.append((gid[(i + 1, j)], gid[(i + 1, j + 1)], gid[(i, j + 1)]))
+    bary = np.array([[1.0 - (i + j) / nsub, i / nsub, j / nsub] for i, j in grid])
+    sets = [set() for _ in range(P)]
+    for t, p in zip(tr, tp):
+        sets[p].update(int(v) for v in t)
+    ir, ic, iv = [], [], []
+    pv, tris, vertp = [], [], {}
+    first = {}
+    nv = 0
+    for t, p in zip(tr, tp):
+        base = nv
+        for q, b in enumerate(bary):
+            for c in range(3):
+                if b[c] > 0:
+                    ir.append(nv)
+                    ic.append(int(t[c]))
+                    iv.append(b[c])
+                    if b[c] == 1.0:
+                        first.setdefault(int(t[c]), nv)
+            pv.append(p)
+            nv += 1
+        vertp.setdefault(p, []).extend(range(base, nv))
+        tris += [[base + a, base + b, base + c] for a, b, c in sub]
+    I = csr_matrix((iv, (ir, ic)), shape=(nv, m.nn))
+    pv = np.array(pv, int)
+    tris = np.array(tris, int).reshape(-1, 3)
+    Xf = I @ X
+    ta = 0.5 * np.linalg.norm(np.cross(Xf[tris[:, 1]] - Xf[tris[:, 0]], Xf[tris[:, 2]] - Xf[tris[:, 0]]), axis=1)
+    va = np.zeros(nv)
+    for c in range(3):
+        np.add.at(va, tris[:, c], ta / 3.0)
+    area = np.maximum(np.bincount(pv, va, P), 1e-30)
     owner = {}
     for p, sv in enumerate(sets):
         for v in sv:
             owner.setdefault(v, []).append(p)
-    r, cc, w = [], [], []
+
+    def kernel(ps, a, b):
+        vs = np.concatenate([np.asarray(vertp[p], int) for p in ps])
+        sg = width * np.sqrt(np.mean([area[p] for p in ps]))
+        w = np.exp(-((_seg_dist(Xf[vs], X[a], X[b]) / max(sg, 1e-30)) ** 2))
+        w = w / max(float(w @ va[vs]), 1e-30)
+        return vs, w
+
+    def assemble(items, ncol):
+        r, cc, w = [], [], []
+        for q, ps, a, b in items:
+            if not ps:
+                continue
+            vs, ww = kernel(ps, a, b)
+            r += vs.tolist()
+            cc += [q] * len(vs)
+            w += ww.tolist()
+        return csr_matrix((w, (r, cc)), shape=(nv, ncol))
+
+    bitems, bpan = [], []
     for q, (a, b) in enumerate(m.bars):
         ps = [p for p in owner.get(int(a), []) if int(b) in sets[p]]
-        for p in ps:
-            r.append(p)
-            cc.append(q)
-            w.append(1.0 / len(ps))
-    Bm = csr_matrix((w, (r, cc)), shape=(P, len(m.bars)))
-    r, cc, w = [], [], []
+        bitems.append((q, ps, int(a), int(b)))
+    hitems = []
     for q, (i, j, k, l) in enumerate(m.h):
         pa = [p for p in owner.get(int(j), []) if int(k) in sets[p] and int(i) in sets[p]][:1]
         pb = [p for p in owner.get(int(j), []) if int(k) in sets[p] and int(l) in sets[p]][:1]
-        ps = pa + [p for p in pb if p not in pa]
-        for p in ps:
-            r.append(p)
-            cc.append(q)
-            w.append(1.0 / len(ps))
-    Hm = csr_matrix((w, (r, cc)), shape=(P, len(m.h)))
-    vid, pv, tris, first = [], [], [], {}
-    for p in range(P):
-        loc = {}
-        for v in sorted(sets[p]):
-            loc[v] = len(vid)
-            first.setdefault(v, len(vid))
-            vid.append(v)
-            pv.append(p)
-        for t in tr[tp == p]:
-            tris.append([loc[int(v)] for v in t])
-    return {"P": P, "area": area, "B": Bm, "H": Hm, "fold": (m.hkind == FOLD).astype(float), "vid": np.array(vid, int), "pv": np.array(pv, int), "tris": np.array(tris, int).reshape(-1, 3), "first": first}
+        hitems.append((q, pa + [p for p in pb if p not in pa], int(j), int(k)))
+    Wb = assemble(bitems, len(m.bars))
+    Wh = assemble(hitems, len(m.h))
+    return {"P": P, "area": area, "va": va, "pv": pv, "tris": tris, "I": I, "first": first, "Wb": Wb, "Wh": Wh, "fold": (m.hkind == FOLD).astype(float), "nv": nv, "nsub": nsub}
 
 
 def _panel_fields(pm, Ub, Uh, Wb=None, Wh=None):
     Ub = np.asarray(Ub, float)
     Uh = np.asarray(Uh, float)
     fo = pm["fold"]
-    st = pm["B"] @ Ub / pm["area"]
-    fd = pm["H"] @ (Uh * fo) / pm["area"] if len(Uh) else np.zeros(pm["P"])
-    bd = pm["H"] @ (Uh * (1 - fo)) / pm["area"] if len(Uh) else np.zeros(pm["P"])
-    out = {"energyDensity": st + fd + bd, "panelEnergy": (st + fd + bd) * pm["area"], "bendDensity": bd, "foldDensity": fd, "stretchDensity": st}
+    st = pm["Wb"] @ Ub
+    fd = pm["Wh"] @ (Uh * fo) if len(Uh) else np.zeros(pm["nv"])
+    bd = pm["Wh"] @ (Uh * (1 - fo)) if len(Uh) else np.zeros(pm["nv"])
+    tot = st + fd + bd
+    pe = np.bincount(pm["pv"], tot * pm["va"], pm["P"])
+    out = {"energyDensity": tot, "bendDensity": bd, "foldDensity": fd, "stretchDensity": st, "panelEnergy": pe[pm["pv"]]}
     if Wb is not None:
-        out["plasticDensity"] = (pm["B"] @ np.asarray(Wb, float) + (pm["H"] @ np.asarray(Wh, float) if len(Wh) else 0.0)) / pm["area"]
+        out["plasticDensity"] = pm["Wb"] @ np.asarray(Wb, float) + (pm["Wh"] @ np.asarray(Wh, float) if len(Wh) else 0.0)
     return out
 
 
@@ -208,17 +253,15 @@ def _elastic_parts(m, asm, x):
 
 
 def _expand(res, pm):
-    vid = pm["vid"]
-    pv = pm["pv"]
-    res.nodes = res.nodes[vid]
+    I = pm["I"]
+    res.nodes = I @ res.nodes
     res.tris = pm["tris"]
     fm = pm["first"]
     res.lines = np.array([[fm[int(a)], fm[int(b)]] for a, b in res.lines if int(a) in fm and int(b) in fm], int).reshape(-1, 2)
     res.fedges = np.array([[fm[int(a)], fm[int(b)]] for a, b in res.fedges if int(a) in fm and int(b) in fm], int).reshape(-1, 2)
     for f in res.frames:
-        f["U"] = f["U"][vid]
-        f["fields"] = {k: (v[pv] if k in PANEL_FIELDS else v[vid]) for k, v in f["fields"].items()}
-    res.node_map = vid.tolist()
+        f["U"] = I @ f["U"]
+        f["fields"] = {k: (v if k in PANEL_FIELDS else I @ v) for k, v in f["fields"].items()}
     return res
 
 
