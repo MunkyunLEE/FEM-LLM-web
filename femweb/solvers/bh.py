@@ -76,8 +76,8 @@ def build(model, spec):
         "long_factor": c["long_factor"],
         "bar_area": c["bar_area"],
         "tri_bars": c["tri_bars"],
-        "bar_yield": inf if c["bar_yield"] is None else float(c["bar_yield"]),
-        "bar_H": float(c["bar_H"] or 0.0),
+        "bar_yield": float(c["bar_yield"]) if c["bar_yield"] is not None else float(mat["yield"]) if mat.get("yield") else inf,
+        "bar_H": float(c["bar_H"]) if c["bar_H"] else float(mat.get("hardening") or 0.0),
         "fold_yield": inf if c["fold_yield"] is None else float(c["fold_yield"]),
         "fold_H": float(c["fold_H"] or 0.0),
         "bend_yield": inf if c["bend_yield"] is None else float(c["bend_yield"]),
@@ -323,8 +323,8 @@ def _fold_basis(m):
     if mode == "value":
         return f"직접 지정 {m.p.get('fold_k')} N·mm/rad/mm"
     if m.Lstar_ratio is not None:
-        return f"자동 (MERLIN2): L*/L_F = {m.Lstar_ratio:g}, 평균 L* {m.Lstar:.4g} mm ({kl})"
-    return f"자동 (Filipov): L* = {m.Lstar:g} mm ({kl})"
+        return f"L* = {m.Lstar_ratio:g}·L_F (기본, 평균 L* {m.Lstar:.4g} mm, {kl})"
+    return f"L* = {m.Lstar:g} mm ({kl})"
 
 
 def _summary_model(m):

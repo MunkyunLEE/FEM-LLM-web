@@ -493,8 +493,8 @@ PRESETS = {
         "ops": [
             {"op": "set_solver", "solver": "bh"},
             {"op": "set_section", "group": "*", "thickness": 0.01},
-            {"op": "set_material", "name": "default", "E": 10000, "nu": 0.3, "rho": 1e-9},
-            {"op": "set_bh", "fold_mode": "value", "fold_k": 0.2, "bar_area": 0.045, "bar_yield": 200, "bar_H": 1000, "fold_yield": 0.02, "fold_H": 0.001, "cycles": 5, "cycle_back": 0.1, "watch": ["0-6", "1-6"]},
+            {"op": "set_material", "name": "default", "E": 10000, "nu": 0.3, "rho": 1e-9, "yield": 200, "hardening": 1000},
+            {"op": "set_bh", "fold_mode": "value", "fold_k": 0.2, "bar_area": 0.045, "fold_yield": 0.02, "fold_H": 0.001, "cycles": 5, "cycle_back": 0.1, "watch": ["0-6", "1-6"]},
             {"op": "add_bc", "type": "pinned", "name": "아래 육각 고정", "select": {"plane": {"axis": "z", "at": "min"}}},
             {"op": "add_bc", "name": "위 육각 압축", "dofs": [3], "value": -0.6, "select": {"plane": {"axis": "z", "at": "max"}}},
             {"op": "set_step", "type": "static", "nlgeom": True, "increments": 60},

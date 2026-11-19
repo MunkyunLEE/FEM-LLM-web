@@ -149,15 +149,25 @@ def solve_displacement(m, pb=None, steps=50, tol=1e-8, kmax=30, beta_min=1e-4, c
         h = min(beta * h0, 1.0 - lam)
         lam1 = lam + h
         xi = _set_prescribed(pb, x, lam1)
+        if v_prev is None and len(pb.free):
+            T0, K0, _, _ = _residual(pb, x, st, lam1)
+            dup = (xi - x).ravel()
+            K0 = K0.tocsr()
+            rhs = (T0 - lam1 * pb.F)[pb.free] + K0[pb.free][:, pb.pres] @ dup[pb.pres]
+            dv = lin_solve(K0[pb.free][:, pb.free], -rhs)
+            if np.all(np.isfinite(dv)):
+                xi = xi.ravel()
+                xi[pb.free] += dv
+                xi = xi.reshape(-1, 3)
         if v_prev is not None:
             xi = xi.ravel()
             xi[pb.free] += v_prev[pb.free] * h
             xi = xi.reshape(-1, 3)
-            if pb.contact is not None:
-                a = pb.contact.stepsize(x, xi)
-                if a < 1.0:
-                    xi = (x.ravel() + 0.8 * a * (xi.ravel() - x.ravel())).reshape(-1, 3)
-                    xi = _set_prescribed(pb, xi, lam1)
+        if pb.contact is not None:
+            a = pb.contact.stepsize(x, xi)
+            if a < 1.0:
+                xi = (x.ravel() + 0.8 * a * (xi.ravel() - x.ravel())).reshape(-1, 3)
+                xi = _set_prescribed(pb, xi, lam1)
         ok = False
         k = 0
         for k in range(1, kmax + 1):

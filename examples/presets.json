@@ -1836,15 +1836,15 @@
     "name": "default",
     "E": 10000,
     "nu": 0.3,
-    "rho": 1e-09
+    "rho": 1e-09,
+    "yield": 200,
+    "hardening": 1000
    },
    {
     "op": "set_bh",
     "fold_mode": "value",
     "fold_k": 0.2,
     "bar_area": 0.045,
-    "bar_yield": 200,
-    "bar_H": 1000,
     "fold_yield": 0.02,
     "fold_H": 0.001,
     "cycles": 5,

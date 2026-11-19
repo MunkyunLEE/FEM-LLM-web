@@ -736,7 +736,7 @@ def parse_coupling(c, model, spec, ctx):
 
 BH_RULES = [
     (r"l\s*\*\s*/\s*l\s*_?\s*f\s*(?:를|을|은|는|=|:)?\s*" + NUM + r"|l\s*\*\s*비\s*(?:율)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "Lstar_ratio"),
-    (r"l\s*\*\s*(?:를|을|은|는|=|:)?\s*" + NUM + r"\s*mm", "Lstar"),
+    (r"l\s*\*\s*(?:를|을|은|는|=|:)?\s*" + NUM + r"\s*(?:mm)?", "Lstar"),
     (r"(?:바|bar)\s*(?:단면적|면적|area)\s*(?:를|을|은|는|=|:)?\s*" + NUM, "bar_area"),
     (r"(?:바|bar)\s*(?:항복|yield)\s*(?:응력)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "bar_yield"),
     (r"(?:바|bar)\s*(?:경화|hardening|h)\s*(?:계수)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "bar_H"),

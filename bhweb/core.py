@@ -60,7 +60,7 @@ def bar_response(m, x, st):
     sg = np.sign(tau)
     ee = ee - dg * sg
     tau = m.Eb * ee
-    Cb = np.where(pl, m.Eb * m.Hb / (m.Eb + m.Hb), m.Eb)
+    Cb = np.where(pl, np.maximum(m.Eb * m.Hb / (m.Eb + m.Hb), 1e-3 * m.Eb), m.Eb)
     new = (eps - ee, st.ab + dg)
     S = tau / lam**2
     C = (Cb - 2 * tau) / lam**4
@@ -80,7 +80,7 @@ def hinge_response(m, x, st, lam=0.0, dth0=None):
     dg = np.where(pl, f / (m.hk + m.hH), 0.0)
     the = th - thp + th0 - dg * np.sign(Mtr)
     M = m.hk * (the - th0)
-    Ch = np.where(pl, m.hk * m.hH / (m.hk + m.hH), m.hk)
+    Ch = np.where(pl, np.maximum(m.hk * m.hH / (m.hk + m.hH), 1e-3 * m.hk), m.hk)
     new_thp = th - the + th0
     if dth0 is not None:
         new_thp = new_thp - lam * dth0

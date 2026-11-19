@@ -1707,7 +1707,7 @@ function renderBH() {
     const r = $(id) && $(id).closest('.row');
     if (r) r.classList.toggle('bhhide', on);
   }
-  for (const id of ['imperfection', 'matY', 'secB', 'secH', 'nlgeom']) {
+  for (const id of ['imperfection', 'secB', 'secH', 'nlgeom']) {
     const r = $(id) && $(id).closest('label');
     if (r) r.classList.toggle('bhhide', on);
   }
@@ -1717,11 +1717,7 @@ function renderBH() {
     return;
   }
   const c = st.spec.bh || {};
-  const mode = c.fold_mode || 'auto';
-  $('bhFoldMode').value = mode;
-  $('bhPctBox').firstChild.textContent = mode === 'percent' ? 'B 대비 %' : mode === 'value' ? 'k (N·mm/rad/mm)' : 'L*/L_F';
-  $('bhPct').value = (mode === 'percent' ? c.fold_percent ?? 10 : mode === 'value' ? c.fold_k : c.Lstar_ratio ?? 3) ?? '';
-  $('bhPct').disabled = mode === 'auto' && c.Lstar != null;
+  if (document.activeElement !== $('bhLstar')) $('bhLstar').value = c.Lstar ?? '';
   $('bhContact').checked = !!c.contact;
   if (document.activeElement !== $('bhTargets')) $('bhTargets').value = (c.targets || []).join(', ');
   const kin = st.spec.step && st.spec.step.type === 'kinematic';
@@ -1877,12 +1873,7 @@ function bindBH() {
     };
   });
   const setbh = (o) => ops([{ op: 'set_bh', ...o }]);
-  $('bhFoldMode').onchange = (e) => setbh({ fold_mode: e.target.value });
-  $('bhPct').onchange = (e) => {
-    const m = $('bhFoldMode').value;
-    const v = bhNum(e.target.value);
-    setbh(m === 'percent' ? { fold_percent: v ?? 10 } : m === 'value' ? { fold_k: v } : { Lstar_ratio: v ?? 3 });
-  };
+  $('bhLstar').onchange = (e) => setbh({ Lstar: bhNum(e.target.value), fold_mode: 'auto' });
   $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
   const selFolds = () => [...BH.sel].filter((k) => (BH.edges.find((c) => ekey(c.edge) === k) || {}).type === 'fold');
   const targets = (n) => {
@@ -1914,11 +1905,11 @@ function bindBH() {
 
 const BH_EXTRA = [
   ['fold_k', null, '접힘 강성 직접 값', 'N·mm/rad/mm'],
-  ['Lstar', null, 'L* 절대값 (Filipov)', 'mm'],
+  ['Lstar_ratio', 3, 'L*/L_F (L* 를 비웠을 때)', ''],
   ['bar_area', null, '바 단면적 직접 지정', 'mm²'],
   ['tri_bars', 'woodruff', '삼각형 바 식', ''],
-  ['bar_yield', null, '바 항복 응력', 'MPa'],
-  ['bar_H', 0, '바 경화 계수', 'MPa'],
+  ['bar_yield', null, '바 항복 응력 (재료 대신)', 'MPa'],
+  ['bar_H', 0, '바 경화 계수 (재료 대신)', 'MPa'],
   ['fold_yield', null, '접힘 힌지 항복 모멘트', 'N·mm/mm'],
   ['fold_H', 0, '접힘 힌지 경화', 'N·mm/rad/mm'],
   ['bend_yield', null, '휨 힌지 항복 모멘트', 'N·mm/mm'],

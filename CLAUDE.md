@@ -43,7 +43,7 @@
 ## BH-web (`bhweb/`, 솔버 `bh`)
 - 웹 무관 계산 패키지: `geom`(이면각 닫힌 식 경사·헤시안), `model`(BHModel, 주름 판정 classify, 자름 split_cuts), `core`(바·힌지 탄소성, 조립), `solve`(Problem, 적응 감쇠 뉴턴 + 에너지 선 탐색, MGDCM), `analysis`(modal, dof_analysis, rigid_fold_path, solution_space), `contact`(GeometricContact), `shapes`, `benchmarks`
 - 어댑터 `femweb/solvers/bh.py`, spec `creases`(엣지 "a-b" → fold/bend/cut), `bh`(설정), ops `set_crease`, `set_bh`, 서버 `/api/creases`, `/api/result/kin3d`
-- 화면 기본 설정은 접힘 강성(자동 MERLIN2 `Lstar_ratio` = L*/L_F, 주름마다 L* = 비율×길이 / 수동 `fold_percent`)과 기하 접촉뿐. 나머지(`Lstar` 절대값, `fold_k`, `bar_area`, `tri_bars`, 소성, `cycles`·`cycle_back`, `gap`, `use_mass` 등)는 부가 설정: 규칙 `rules.parse_bh`·LLM 으로 넣고 화면 왼쪽 아래 "부가 설정" 에 표시
+- 화면 설정은 E, ν, t, L*(mm, 비우면 3·L_F), 재료 항복 응력(→ 바 소성), 기하 접촉뿐. 나머지(`Lstar` 절대값, `fold_k`, `bar_area`, `tri_bars`, 소성, `cycles`·`cycle_back`, `gap`, `use_mass` 등)는 부가 설정: 규칙 `rules.parse_bh`·LLM 으로 넣고 화면 왼쪽 아래 "부가 설정" 에 표시
 - bh 결과에는 기본 그래프 2개(`plots.bh_defaults`: 스텝-에너지, 하중-변위)가 항상 붙음. 컨투어는 요소 에너지를 표시 메쉬에 퍼뜨린 `energyDensity`
 - 예제 `bh_*`, 시험 `tests/test_bh.py` (약 15초)
 - 간이 `barhinge` 솔버는 그대로 둠
