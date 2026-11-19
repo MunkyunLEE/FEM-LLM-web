@@ -498,9 +498,7 @@ PRESETS = {
             {"op": "add_bc", "type": "pinned", "name": "아래 육각 고정", "select": {"plane": {"axis": "z", "at": "min"}}},
             {"op": "add_bc", "name": "위 육각 압축", "dofs": [3], "value": -0.6, "select": {"plane": {"axis": "z", "at": "max"}}},
             {"op": "set_step", "type": "static", "nlgeom": True, "increments": 60},
-            {"op": "add_plot", "title": "하중-변위 히스테리시스 (압축 +)", "x": {"quantity": "u.control"}, "series": [{"quantity": "reaction.control"}]},
             {"op": "add_plot", "title": "주름 회전", "x": {"quantity": "time"}, "series": [{"quantity": "fold.e0-6"}, {"quantity": "fold.e1-6"}]},
-            {"op": "add_plot", "title": "에너지", "x": {"quantity": "time"}, "series": [{"quantity": "energy.external"}, {"quantity": "energy.total"}, {"quantity": "energy.plastic"}]},
         ],
     },
     "bh_flat_miura": {
@@ -529,7 +527,6 @@ PRESETS = {
             {"op": "add_bc", "type": "pinned", "name": "첫 패널 고정", "select": {"plane": {"axis": "x", "at": "min"}}},
             {"op": "add_bc", "type": "pinned", "name": "첫 주름 고정", "select": {"box": {"min": [29.9, -1, -1], "max": [30.1, 31, 1]}}},
             {"op": "set_step", "type": "static", "nlgeom": True, "increments": 40},
-            {"op": "add_plot", "title": "에너지", "x": {"quantity": "time"}, "series": [{"quantity": "energy.fold"}, {"quantity": "energy.contact"}, {"quantity": "energy.stretch"}]},
         ],
     },
     "bh_miura": {

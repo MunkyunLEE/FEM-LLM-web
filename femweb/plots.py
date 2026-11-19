@@ -10,6 +10,12 @@ LABELS = {
     "energy.bar": "바 에너지 (N·mm)",
     "energy.bend": "패널 굽힘 에너지 (N·mm)",
     "energy.fold": "접힘 에너지 (N·mm)",
+    "energy.fold_bar": "접힘 + 바 에너지 (N·mm)",
+    "energy.elastic": "접힘 + 바 + 휨 에너지 (N·mm)",
+    "energy.stretch": "바 에너지 (N·mm)",
+    "step": "스텝",
+    "u.control": "제어 변위 (mm)",
+    "reaction.control": "제어점 반력 (N)",
     "energy.strain": "변형 에너지 (N·mm)",
     "energy.plastic": "소성 소산 에너지 (N·mm)",
     "peeq.max": "최대 등가 소성 변형률",
@@ -100,3 +106,21 @@ def evaluate(plot, result, model):
         n = min(len(x), len(y))
         series.append({"name": s.get("name") or yl, "x": x[:n].tolist(), "y": y[:n].tolist()})
     return {"id": plot.get("id"), "title": plot.get("title", "그래프"), "xlabel": xl, "series": series}
+
+
+def bh_defaults(result):
+    h = result.history
+    out = []
+    if "energy.elastic" in h:
+        ser = [{"quantity": "energy.fold", "name": "접힘"}]
+        if "energy.fold_bar" in h:
+            ser.append({"quantity": "energy.fold_bar", "name": "접힘 + 바"})
+        ser.append({"quantity": "energy.elastic", "name": "접힘 + 바 + 휨 (전체)"})
+        if "energy.plastic" in h:
+            ser.append({"quantity": "energy.plastic", "name": "소성"})
+        out.append({"id": "auto_energy", "title": "스텝-에너지", "x": {"quantity": "step"}, "series": ser, "auto": True})
+    if "u.control" in h and any(abs(v) > 0 for v in h["u.control"]):
+        out.append({"id": "auto_ld", "title": "하중-변위 (제어 자유도)", "x": {"quantity": "u.control"}, "series": [{"quantity": "reaction.control", "name": "반력"}], "auto": True})
+    elif "load_factor" in h and "u.max" in h:
+        out.append({"id": "auto_ld", "title": "하중계수-최대 변위", "x": {"quantity": "u.max"}, "series": [{"quantity": "load_factor", "name": "하중계수"}], "auto": True})
+    return out

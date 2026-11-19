@@ -588,9 +588,11 @@ def get_plots():
             return out
         from . import compare
 
-        for p in S["spec"]["plots"]:
+        auto = plots.bh_defaults(S["result"]) if getattr(S["result"], "solver", "") == "bh" else []
+        for p in auto + S["spec"]["plots"]:
             try:
                 q = plots.evaluate(p, S["result"], active())
+                q["auto"] = bool(p.get("auto"))
                 q["refs"] = []
                 for r in S["refs"]:
                     if r["plot"] != p["id"]:

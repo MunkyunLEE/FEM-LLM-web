@@ -129,3 +129,4 @@ button.danger:hover{background:#7a2c3d}
 #selBox.win{border-color:#7fb8ff;background:rgba(127,184,255,.08)}
 .kin3d{width:440px}
 .kin3d canvas{width:100%;height:320px;display:block;border-radius:6px;background:#111821}
+.bhhide{display:none !important}

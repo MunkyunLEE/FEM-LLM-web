@@ -314,6 +314,19 @@ def _base(m, kind):
     return res
 
 
+def _fold_basis(m):
+    fk = m.hk[m.hkind == FOLD]
+    kl = f"길이당 평균 {float((fk / np.maximum(m.hlen[m.hkind == FOLD], 1e-30)).mean()):.4g} N·mm/rad/mm" if len(fk) else "접힘 없음"
+    mode = m.p.get("fold_mode", "auto")
+    if mode == "percent":
+        return f"패널 B 대비 {m.p.get('fold_percent')}% ({kl})"
+    if mode == "value":
+        return f"직접 지정 {m.p.get('fold_k')} N·mm/rad/mm"
+    if m.Lstar_ratio is not None:
+        return f"자동 (MERLIN2): L*/L_F = {m.Lstar_ratio:g}, 평균 L* {m.Lstar:.4g} mm ({kl})"
+    return f"자동 (Filipov): L* = {m.Lstar:g} mm ({kl})"
+
+
 def _summary_model(m):
     s = m.summary()
     return {
@@ -321,7 +334,7 @@ def _summary_model(m):
         "바 수": s["bars"],
         "접힘 / 패널 휨 / 휨 엣지 힌지": [s["folds"], s["panel_bends"], s["edge_bends"]],
         "판 굽힘강성 B = Et³/12(1-ν²) (N·mm)": s["B"],
-        "L* (mm)": s["Lstar"],
+        "접힘 강성": _fold_basis(m),
         "자동 판정": m.note,
     }
 
@@ -446,6 +459,9 @@ def _static(m, rec, pb, c, msgs, kind):
             hist[f"fold.e{ekey(e)}"].append(float(np.degrees(th[i])))
             hist[f"moment.e{ekey(e)}"].append(float(rec.M[k][i]))
     hist["energy.bar"] = list(hist["energy.stretch"])
+    hist["energy.fold_bar"] = [a + b for a, b in zip(hist["energy.fold"], hist["energy.stretch"])]
+    hist["energy.elastic"] = [a + b for a, b in zip(hist["energy.fold_bar"], hist["energy.bend"])]
+    hist["step"] = [float(k) for k in range(len(hist["time"]))]
     sf = rec.state
     res.frames[-1]["fields"].update({kk: v for kk, v in _frame_fields(m, rec.x, sf).items() if kk in ("hingePlastic", "barPlastic")})
     res.history = hist
@@ -548,6 +564,8 @@ def _kinematic(m, fixed, c, steps, msgs):
         ef = float(0.5 * np.sum(m.hk[fi] * (p["angles"][k][fi] - m.th0[fi]) ** 2))
         hist["energy.fold"].append(ef)
         hist["energy.total"].append(ef)
+        hist.setdefault("energy.elastic", []).append(ef)
+        hist.setdefault("step", []).append(float(k))
         for i in fi:
             hist[f"fold.e{ekey(m.hedge[i])}"].append(float(np.degrees(p["angles"][k][i])))
     res.history = hist

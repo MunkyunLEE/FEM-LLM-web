@@ -248,11 +248,9 @@ class BHModel:
                 mass[f] += rho * t * S / 3.0
                 tris.append(tuple(f))
         self.wbar = float(np.mean(widths)) if widths else 1.0
-        if p.get("Lstar") is not None:
-            Ls = float(p["Lstar"])
-        else:
-            Ls = float(p["Lstar_ratio"]) * self.wbar
-        self.Lstar = Ls
+        Lsa = float(p["Lstar"]) if p.get("Lstar") is not None else None
+        Lsr = float(p["Lstar_ratio"])
+        Lsl = []
         eds = edges_of(F)
         self.fold_edges = []
         for e, fl in eds.items():
@@ -275,6 +273,8 @@ class BHModel:
                 elif mode == "value":
                     K = float(p["fold_k"]) * LF
                 else:
+                    Ls = Lsa if Lsa is not None else Lsr * LF
+                    Lsl.append(Ls)
                     Kl = LF * B / Ls
                     Km = 0.55 * B * (LF / t) ** (1.0 / 3.0)
                     K = 1.0 / (1.0 / Kl + 1.0 / Km)
@@ -286,6 +286,8 @@ class BHModel:
             hlen.append(LF)
             if kind == FOLD:
                 self.fold_edges.append(oe)
+        self.Lstar = float(np.mean(Lsl)) if Lsl else (Lsa if Lsa is not None else Lsr * self.wbar)
+        self.Lstar_ratio = None if Lsa is not None else Lsr
         bars = list(bar.keys())
         A = [bar[k] for k in bars]
         for c, i, a in spokes:

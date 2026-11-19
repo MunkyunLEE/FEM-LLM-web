@@ -41,15 +41,11 @@
     </section>
     <section id="bhPanel" hidden>
       <h2>BH-web 바-힌지 <small id="bhCount"></small></h2>
-      <div class="row three"><label title="자동: E, ν, t, L* 로 접힘 강성 계산. 퍼센트: 패널 굽힘강성 B=Et³/12(1-ν²) 대비 %. 값: N·mm/rad/mm 직접 지정">접힘 강성<select id="bhFoldMode"><option value="auto">자동 (수식)</option><option value="percent">패널 B 대비 %</option><option value="value">직접 값</option></select></label><label title="자동일 때 L*/w̄ (평균 패널 폭 배수). L* 를 직접 넣으면 그 값을 씀">L* / w̄<input id="bhLratio" type="number" step="any" min="0"></label><label id="bhPctBox">% 또는 값<input id="bhPct" type="number" step="any" min="0"></label></div>
-      <div class="row three"><label title="바 항복 응력 (MPa). 비우면 탄성">바 항복<input id="bhBarY" type="number" step="any" min="0" placeholder="탄성"></label><label title="바 경화 계수 (MPa)">바 H<input id="bhBarH" type="number" step="any" min="0" placeholder="0"></label><label title="판정 각도 (도): 이보다 꺾인 공유 엣지를 접힘으로">자동 판정각<input id="bhTol" type="number" step="any" min="0"></label></div>
-      <div class="row three"><label title="접힘 힌지 항복 모멘트 (N·mm/mm, 길이당). 비우면 탄성">접힘 항복<input id="bhFoldY" type="number" step="any" min="0" placeholder="탄성"></label><label title="접힘 힌지 경화 (N·mm/rad/mm)">접힘 H<input id="bhFoldH" type="number" step="any" min="0" placeholder="0"></label><label title="패널 휨 힌지 항복 (N·mm/mm)">휨 항복<input id="bhBendY" type="number" step="any" min="0" placeholder="탄성"></label></div>
-      <div class="row three"><label class="check" title="기하 접촉: 면끼리 관통 방지 (IPC 장벽 + 연속 충돌 검사). 마찰·감쇠 없음"><input type="checkbox" id="bhContact">기하 접촉</label><label title="비우면 평균 바 길이의 0.1%">접촉 간격 (mm)<input id="bhGap" type="number" step="any" min="0" placeholder="자동"></label><label title="휨 힌지 경화 (N·mm/rad/mm)">휨 H<input id="bhBendH" type="number" step="any" min="0" placeholder="0"></label></div>
-      <div class="row four"><label title="0 이면 한 번 가력. 1 이상이면 지정 변위를 그 횟수만큼 왕복">반복 횟수<input id="bhCycles" type="number" min="0" step="1" placeholder="0"></label><label title="반복할 때 지정 변위 반대쪽으로 되돌아갈 크기 (mm). 0 이면 0 ↔ 지정 변위">되돌림 변위 (mm)<input id="bhCycBack" type="number" step="any" min="0" placeholder="0"></label><label title="바 단면적을 직접 지정 (mm²). 비우면 두께로 계산">바 면적<input id="bhArea" type="number" step="any" min="0" placeholder="자동"></label><label class="check" title="모드 해석에서 질량을 넣으면 K v = λ M v, 끄면 K v = λ v"><input type="checkbox" id="bhMass">모드에 질량</label></div>
+      <div class="row three"><label title="자동 (MERLIN2 auto): E, ν, t 와 L*/L_F 로 접힘·패널 휨·바 면적을 모두 계산 (L_F 는 주름 길이, 보통 1~5, 기본 3). 수동: 접힘 강성을 패널 굽힘강성 B=Et³/12(1-ν²) 대비 % 로">접힘 강성<select id="bhFoldMode"><option value="auto">자동 (MERLIN2)</option><option value="percent">패널 B 대비 %</option><option value="value" hidden>직접 값 (부가 설정)</option></select></label><label id="bhPctBox">L*/L_F<input id="bhPct" type="number" step="any" min="0"></label><label class="check" title="기하 접촉: 면끼리 관통 방지 (IPC 장벽 + 연속 충돌 검사). 마찰·감쇠 없음"><input type="checkbox" id="bhContact">기하 접촉</label></div>
       <div class="row"><button id="bhEdit" type="button" title="켜면 마우스 왼쪽 드래그가 상자 선택이 됩니다. 왼→오: 완전히 들어간 엣지, 오→왼: 걸친 엣지. Shift 추가, Ctrl 제외, Esc 해제, 클릭은 한 개">주름 편집 모드 끔</button></div>
       <div class="row four"><button class="bhType" data-t="fold" type="button">접힘</button><button class="bhType" data-t="bend" type="button">휨</button><button class="bhType" data-t="cut" type="button">자름</button><button class="bhType" data-t="auto" type="button">자동</button></div>
-      <div class="row three"><button id="bhDrivers" type="button" title="선택한 주름을 기구 해석의 구동 주름으로">구동 주름 지정</button><label title="구동 주름의 목표 이면각 (도, 평면 = 180). 여러 개면 쉼표">목표 이면각<input id="bhTargets" type="text" placeholder="예: 60"></label><button id="bhClearDrv" class="ghost" type="button">구동 해제</button></div>
-      <div class="row two"><button id="bhPlot3" type="button" title="선택한 접힘 주름 3개의 회전각으로 기구 해석 해공간 3D 그래프">3D 해공간 주름 (3개)</button><button id="bhWatch" type="button" title="선택한 주름의 각도·모멘트 이력을 결과에 기록">이력 기록 주름</button></div>
+      <div class="row three bhKin"><button id="bhDrivers" type="button" title="선택한 주름을 기구 해석의 구동 주름으로">구동 주름 지정</button><label title="구동 주름의 목표 이면각 (도, 평면 = 180). 여러 개면 쉼표">목표 이면각<input id="bhTargets" type="text" placeholder="예: 60"></label><button id="bhClearDrv" class="ghost" type="button">구동 해제</button></div>
+      <div class="row bhKin"><button id="bhPlot3" type="button" title="선택한 접힘 주름 3개의 회전각으로 기구 해석 해공간 3D 그래프">3D 해공간 주름 (3개)</button></div>
       <div id="bhSel" class="info"></div>
       <div class="legend" id="bhLegend"><span style="color:#ff6b5e">━ 접힘</span> <span style="color:#5ec8ff">━ 휨</span> <span style="color:#ffd84a">━ 자름</span> <span style="color:#7d8a99">━ 경계</span> <span style="color:#ffffff">━ 선택</span></div>
     </section>
@@ -64,6 +60,10 @@
       <div id="cpList" class="list"></div>
       <div id="warnings"></div>
       <div class="row"><button id="undo" class="ghost" type="button" disabled>되돌리기</button></div>
+    </section>
+    <section id="extraPanel" hidden>
+      <h2>부가 설정 <small id="extraCount"></small></h2>
+      <div id="extraList" class="list"></div>
     </section>
     <section class="run">
       <button id="solve" class="primary">해석 실행</button>

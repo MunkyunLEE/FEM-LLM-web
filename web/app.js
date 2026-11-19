@@ -915,6 +915,7 @@ function renderControls() {
   $('hingeInfo').textContent = hg.groups.length ? '힌지: ' + hg.groups.map((g) => `${g.name} ${g.edges}개 엣지 · ${g.length} mm${g.pin ? ' · 핀' : ''}`).join(' / ') : st.model.kind === 'obj' && st.model.counts.shells ? '지정된 힌지 없음 (쉘 이음은 강접, 바-힌지는 모든 내부 엣지가 접힘선)' : '';
   $('undo').disabled = !st.can_undo;
   renderBH();
+  renderExtras();
 }
 
 function renderSummary() {
@@ -1039,7 +1040,8 @@ function chart(p) {
 async function loadPlots() {
   const box = $('plots');
   box.innerHTML = '';
-  if (!st || !st.spec || !st.spec.plots.length) return;
+  if (!st || !st.spec) return;
+  if (!st.spec.plots.length && !(st.result && st.spec.solver === 'bh')) return;
   if (!st.result) {
     box.append(el('div', 'info', `그래프 ${st.spec.plots.length}개가 등록되어 있습니다. 해석을 실행하면 표시됩니다.`));
     return;
@@ -1050,7 +1052,8 @@ async function loadPlots() {
     const t = el('div', 'ptitle');
     const x = el('button', '', '✕');
     x.onclick = () => ops([{ op: 'remove', id: p.id }]);
-    t.append(el('span', '', `${p.id} · ${p.title}`), x);
+    t.append(el('span', '', p.auto ? `기본 · ${p.title}` : `${p.id} · ${p.title}`));
+    if (!p.auto) t.append(x);
     d.append(t);
     if (p.error) d.append(el('div', 'perr', p.error));
     else {
@@ -1425,6 +1428,13 @@ function pickInfo(ev) {
   const cp = el('button', '', '복사');
   cp.onclick = () => navigator.clipboard && navigator.clipboard.writeText(lines.join('\n'));
   hud.append(cp);
+  if (best >= 0) {
+    const gb = el('button', '', '변위 그래프');
+    gb.title = '이 절점의 ux, uy, uz 이력을 그래프로 추가';
+    const nd = best;
+    gb.onclick = () => ops([{ op: 'add_plot', title: `절점 #${nd + 1} 변위`, x: { quantity: st.spec.solver === 'bh' ? 'step' : 'time' }, series: ['ux', 'uy', 'uz'].map((q) => ({ quantity: q, select: { nodes: [nd] }, reduce: 'mean', name: q })) }]);
+    hud.append(gb);
+  }
   if (chip) {
     const b = el('button', '', '지시문에 넣기');
     b.onclick = () => {
@@ -1693,32 +1703,29 @@ function drawCreases() {
 function renderBH() {
   const on = !!st && !!st.spec && st.spec.solver === 'bh';
   $('bhPanel').hidden = !on;
+  for (const id of ['control', 'controlKind', 'dampKind', 'element', 'device', 'matH', 'hingeK', 'hingeAuto']) {
+    const r = $(id) && $(id).closest('.row');
+    if (r) r.classList.toggle('bhhide', on);
+  }
+  for (const id of ['imperfection', 'matY', 'secB', 'secH', 'nlgeom']) {
+    const r = $(id) && $(id).closest('label');
+    if (r) r.classList.toggle('bhhide', on);
+  }
+  if ($('hingeInfo')) $('hingeInfo').classList.toggle('bhhide', on);
   if (!on) {
     if (BH.edit) setEdit(false);
     return;
   }
   const c = st.spec.bh || {};
-  $('bhFoldMode').value = c.fold_mode || 'auto';
-  $('bhLratio').value = c.Lstar_ratio ?? 3;
   const mode = c.fold_mode || 'auto';
-  $('bhPctBox').firstChild.textContent = mode === 'value' ? 'k (N·mm/rad/mm)' : mode === 'percent' ? 'B 대비 %' : 'L* (mm)';
-  $('bhPct').value = (mode === 'value' ? c.fold_k : mode === 'percent' ? c.fold_percent ?? 10 : c.Lstar) ?? '';
-  $('bhLratio').disabled = mode !== 'auto';
-  $('bhBarY').value = c.bar_yield ?? '';
-  $('bhBarH').value = c.bar_H || '';
-  $('bhFoldY').value = c.fold_yield ?? '';
-  $('bhFoldH').value = c.fold_H || '';
-  $('bhBendY').value = c.bend_yield ?? '';
-  $('bhBendH').value = c.bend_H || '';
-  $('bhTol').value = c.tol ?? 3;
+  $('bhFoldMode').value = mode;
+  $('bhPctBox').firstChild.textContent = mode === 'percent' ? 'B 대비 %' : mode === 'value' ? 'k (N·mm/rad/mm)' : 'L*/L_F';
+  $('bhPct').value = (mode === 'percent' ? c.fold_percent ?? 10 : mode === 'value' ? c.fold_k : c.Lstar_ratio ?? 3) ?? '';
+  $('bhPct').disabled = mode === 'auto' && c.Lstar != null;
   $('bhContact').checked = !!c.contact;
-  $('bhGap').value = c.gap ?? '';
-  $('bhGap').disabled = !c.contact;
-  $('bhCycles').value = c.cycles || '';
-  $('bhCycBack').value = c.cycle_back || '';
-  $('bhArea').value = c.bar_area ?? '';
-  $('bhMass').checked = c.use_mass !== false;
   if (document.activeElement !== $('bhTargets')) $('bhTargets').value = (c.targets || []).join(', ');
+  const kin = st.spec.step && st.spec.step.type === 'kinematic';
+  document.querySelectorAll('.bhKin').forEach((r) => (r.hidden = !kin));
   const cnt = {};
   for (const e of BH.edges) cnt[e.type] = (cnt[e.type] || 0) + 1;
   $('bhCount').textContent = Object.entries(cnt).map(([k, v]) => `${BH_NAME[k] || k} ${v}`).join(' · ');
@@ -1729,7 +1736,6 @@ function renderBH() {
   if (man) lines.push(`직접 지정 ${man}개`);
   if ((c.drivers || []).length) lines.push(`구동: ${c.drivers.map((d, i) => `${d}${c.targets && c.targets[i] !== undefined ? ' → ' + c.targets[i] + '°' : ''}`).join(', ')}`);
   if ((c.plot3 || []).length) lines.push(`3D 해공간: ${c.plot3.join(', ')}`);
-  if ((c.watch || []).length) lines.push(`이력: ${c.watch.join(', ')}`);
   if (BH.note) lines.push(BH.note);
   $('bhSel').textContent = lines.join('\n');
   $('bhSel').style.whiteSpace = 'pre-line';
@@ -1872,19 +1878,12 @@ function bindBH() {
   });
   const setbh = (o) => ops([{ op: 'set_bh', ...o }]);
   $('bhFoldMode').onchange = (e) => setbh({ fold_mode: e.target.value });
-  $('bhLratio').onchange = (e) => setbh({ Lstar_ratio: bhNum(e.target.value) ?? 3 });
   $('bhPct').onchange = (e) => {
     const m = $('bhFoldMode').value;
     const v = bhNum(e.target.value);
-    setbh(m === 'value' ? { fold_k: v } : m === 'percent' ? { fold_percent: v ?? 10 } : { Lstar: v });
+    setbh(m === 'percent' ? { fold_percent: v ?? 10 } : m === 'value' ? { fold_k: v } : { Lstar_ratio: v ?? 3 });
   };
-  const num = { bhBarY: 'bar_yield', bhBarH: 'bar_H', bhFoldY: 'fold_yield', bhFoldH: 'fold_H', bhBendY: 'bend_yield', bhBendH: 'bend_H', bhGap: 'gap', bhTol: 'tol' };
-  for (const [id, f] of Object.entries(num)) $(id).onchange = (e) => setbh({ [f]: bhNum(e.target.value) ?? (f.endsWith('_H') ? 0 : f === 'tol' ? 3 : null) });
   $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
-  $('bhMass').onchange = (e) => setbh({ use_mass: e.target.checked });
-  $('bhCycles').onchange = (e) => setbh({ cycles: Math.max(0, Math.round(bhNum(e.target.value) || 0)) });
-  $('bhCycBack').onchange = (e) => setbh({ cycle_back: Math.abs(bhNum(e.target.value) || 0) });
-  $('bhArea').onchange = (e) => setbh({ bar_area: bhNum(e.target.value) });
   const selFolds = () => [...BH.sel].filter((k) => (BH.edges.find((c) => ekey(c.edge) === k) || {}).type === 'fold');
   const targets = (n) => {
     const t = $('bhTargets').value.split(/[,\s]+/).filter(Boolean).map(Number);
@@ -1911,10 +1910,61 @@ function bindBH() {
     if (d.length !== 3) return note(`접힘 주름을 정확히 3개 선택하세요 (지금 ${d.length}개)`, true);
     setbh({ plot3: d });
   };
-  $('bhWatch').onclick = () => {
-    const d = [...BH.sel];
-    setbh({ watch: d });
-  };
+}
+
+const BH_EXTRA = [
+  ['fold_k', null, '접힘 강성 직접 값', 'N·mm/rad/mm'],
+  ['Lstar', null, 'L* 절대값 (Filipov)', 'mm'],
+  ['bar_area', null, '바 단면적 직접 지정', 'mm²'],
+  ['tri_bars', 'woodruff', '삼각형 바 식', ''],
+  ['bar_yield', null, '바 항복 응력', 'MPa'],
+  ['bar_H', 0, '바 경화 계수', 'MPa'],
+  ['fold_yield', null, '접힘 힌지 항복 모멘트', 'N·mm/mm'],
+  ['fold_H', 0, '접힘 힌지 경화', 'N·mm/rad/mm'],
+  ['bend_yield', null, '휨 힌지 항복 모멘트', 'N·mm/mm'],
+  ['bend_H', 0, '휨 힌지 경화', 'N·mm/rad/mm'],
+  ['cycles', 0, '반복 하중', '회'],
+  ['cycle_back', 0, '반복 되돌림 변위', 'mm'],
+  ['gap', null, '접촉 간격', 'mm'],
+  ['tol', 3, '주름 자동 판정각', '도'],
+  ['long_factor', 100, '긴 대각선 휨 배수', ''],
+  ['use_mass', true, '모드 해석 질량', ''],
+  ['bend_k', null, '휨 강성 직접 값', 'N·mm/rad/mm'],
+  ['watch', [], '이력 기록 주름', ''],
+  ['rest', {}, '주름 목표각 구동', '도'],
+];
+
+function renderExtras() {
+  const box = $('extraList');
+  if (!box) return;
+  box.innerHTML = '';
+  const on = !!st && !!st.spec && st.spec.solver === 'bh';
+  const c = (on && st.spec.bh) || {};
+  const items = [];
+  if (on) {
+    for (const [k, d, lab, unit] of BH_EXTRA) {
+      const v = c[k];
+      if (v === undefined || JSON.stringify(v) === JSON.stringify(d)) continue;
+      if (k === 'fold_k' && c.fold_mode !== 'value') continue;
+      let txt = typeof v === 'object' ? (Array.isArray(v) ? v.join(', ') : Object.entries(v).map(([e, a]) => `${e} → ${a}`).join(', ')) : k === 'use_mass' ? (v ? '포함' : 'K 만 (질량 없음)') : `${v}${unit ? ' ' + unit : ''}`;
+      items.push([k, d, lab, txt]);
+    }
+    if (c.fold_mode === 'percent') items.unshift(['fold_mode', 'auto', '접힘 강성 수동', `패널 B 대비 ${c.fold_percent ?? 10}%`]);
+  }
+  $('extraPanel').hidden = !items.length;
+  $('extraCount').textContent = items.length ? `${items.length}개` : '';
+  for (const [k, d, lab, txt] of items) {
+    const it = el('div', 'item');
+    const top = el('div', 'top');
+    const nm = el('span');
+    nm.append(document.createTextNode(lab));
+    const x = el('button', 'x', '✕');
+    x.title = '기본값으로 되돌리기';
+    x.onclick = () => ops([{ op: 'set_bh', [k]: d }]);
+    top.append(nm, x);
+    it.append(top, el('div', 'desc', txt));
+    box.append(it);
+  }
 }
 
 function textSprite(text, color) {

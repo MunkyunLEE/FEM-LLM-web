@@ -1887,18 +1887,6 @@
    },
    {
     "op": "add_plot",
-    "title": "하중-변위 히스테리시스 (압축 +)",
-    "x": {
-     "quantity": "u.control"
-    },
-    "series": [
-     {
-      "quantity": "reaction.control"
-     }
-    ]
-   },
-   {
-    "op": "add_plot",
     "title": "주름 회전",
     "x": {
      "quantity": "time"
@@ -1909,24 +1897,6 @@
      },
      {
       "quantity": "fold.e1-6"
-     }
-    ]
-   },
-   {
-    "op": "add_plot",
-    "title": "에너지",
-    "x": {
-     "quantity": "time"
-    },
-    "series": [
-     {
-      "quantity": "energy.external"
-     },
-     {
-      "quantity": "energy.total"
-     },
-     {
-      "quantity": "energy.plastic"
      }
     ]
    }
@@ -2031,24 +2001,6 @@
     "type": "static",
     "nlgeom": true,
     "increments": 40
-   },
-   {
-    "op": "add_plot",
-    "title": "에너지",
-    "x": {
-     "quantity": "time"
-    },
-    "series": [
-     {
-      "quantity": "energy.fold"
-     },
-     {
-      "quantity": "energy.contact"
-     },
-     {
-      "quantity": "energy.stretch"
-     }
-    ]
    }
   ]
  },

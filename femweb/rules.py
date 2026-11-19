@@ -734,6 +734,72 @@ def parse_coupling(c, model, spec, ctx):
     return [op], [], [], c.leftover(), {}
 
 
+BH_RULES = [
+    (r"l\s*\*\s*/\s*l\s*_?\s*f\s*(?:를|을|은|는|=|:)?\s*" + NUM + r"|l\s*\*\s*비\s*(?:율)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "Lstar_ratio"),
+    (r"l\s*\*\s*(?:를|을|은|는|=|:)?\s*" + NUM + r"\s*mm", "Lstar"),
+    (r"(?:바|bar)\s*(?:단면적|면적|area)\s*(?:를|을|은|는|=|:)?\s*" + NUM, "bar_area"),
+    (r"(?:바|bar)\s*(?:항복|yield)\s*(?:응력)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "bar_yield"),
+    (r"(?:바|bar)\s*(?:경화|hardening|h)\s*(?:계수)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "bar_H"),
+    (r"(?:접힘|폴딩|fold(?:ing)?)\s*(?:힌지)?\s*(?:항복|yield)\s*(?:모멘트)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "fold_yield"),
+    (r"(?:접힘|폴딩|fold(?:ing)?)\s*(?:힌지)?\s*(?:경화|hardening|h)\s*(?:계수)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "fold_H"),
+    (r"(?:휨|밴딩|벤딩|bend(?:ing)?)\s*(?:힌지)?\s*(?:항복|yield)\s*(?:모멘트)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "bend_yield"),
+    (r"(?:휨|밴딩|벤딩|bend(?:ing)?)\s*(?:힌지)?\s*(?:경화|hardening|h)\s*(?:계수)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "bend_H"),
+    (r"(?:반복|사이클|cycle)\s*(?:하중)?\s*" + NUM + r"\s*(?:회|번|cycles?)?|" + NUM + r"\s*(?:회|번)\s*(?:반복|왕복)", "cycles"),
+    (r"(?:되돌림|되돌아|반대\s*(?:방향)?(?:으로)?)\s*(?:변위)?\s*(?:를|을|은|는|=|:)?\s*" + NUM, "cycle_back"),
+    (r"접촉\s*간격\s*(?:를|을|은|는|=|:)?\s*" + NUM, "gap"),
+    (r"(?:판정\s*각|자동\s*판정\s*각)\s*(?:를|을|은|는|=|:)?\s*" + NUM, "tol"),
+    (r"(?:접힘|폴딩|fold)\s*(?:강성|stiffness)\s*(?:을|를)?\s*(?:직접|값)?\s*(?:k\s*)?(?:=|:)?\s*" + NUM + r"\s*n\s*[·\.]?\s*mm\s*/\s*rad", "fold_k"),
+]
+
+
+def parse_bh(c, spec):
+    op = {}
+    m = c.take(r"(?:패널\s*)?(?:굽힘\s*강성|휨\s*강성|b)\s*(?:의|대비)?\s*" + NUM + r"\s*(?:%|퍼센트|프로)")
+    if m:
+        op["fold_mode"] = "percent"
+        op["fold_percent"] = float(m.group(1))
+    for pat, key in BH_RULES:
+        m = c.take(pat)
+        if not m:
+            continue
+        v = float(next(g for g in m.groups() if g is not None))
+        if key == "cycles":
+            v = int(round(v))
+        if key == "cycle_back":
+            v = abs(v)
+        op[key] = v
+        if key == "Lstar_ratio":
+            op["Lstar"] = None
+            op.setdefault("fold_mode", "auto")
+        if key == "Lstar":
+            op.setdefault("fold_mode", "auto")
+        if key == "fold_k":
+            op["fold_mode"] = "value"
+    if c.take(r"(?:접힘|폴딩|fold)\s*강성\s*(?:을|를)?\s*자동|merlin\s*2?\s*자동|auto\s*mode"):
+        op.update({"fold_mode": "auto", "Lstar": None})
+    if c.take(r"(?:바|bar)\s*(?:단면적|면적)\s*(?:을|를)?\s*(?:자동|두께\s*(?:로|기반)?)"):
+        op["bar_area"] = None
+    if c.take(r"반복\s*(?:하중)?\s*(?:을|를)?\s*(?:끄|꺼|없애|해제|빼)|단조"):
+        op.update({"cycles": 0, "cycle_back": 0.0})
+    if c.take(r"(?:모드|고유)\s*(?:해석)?\s*(?:에서)?\s*질량\s*(?:없이|빼|제외)|k\s*만으로|kv\s*=\s*λv|질량\s*(?:없이|빼고|제외)"):
+        op["use_mass"] = False
+    elif c.take(r"질량\s*(?:포함|넣)"):
+        op["use_mass"] = True
+    if c.take(r"merlin\s*2?\s*(?:식|면적)|merlin2"):
+        op["tri_bars"] = "merlin2"
+    elif c.take(r"woodruff"):
+        op["tri_bars"] = "woodruff"
+    if c.take(r"부가\s*설정\s*(?:을|를)?\s*(?:모두|전부|다)?\s*(?:초기화|리셋|지워|삭제|없애)"):
+        op.update({"fold_k": None, "Lstar": None, "bar_area": None, "tri_bars": "woodruff", "bar_yield": None, "bar_H": 0.0, "fold_yield": None, "fold_H": 0.0, "bend_yield": None, "bend_H": 0.0, "cycles": 0, "cycle_back": 0.0, "gap": None, "tol": 3.0, "long_factor": 100.0, "use_mass": True, "bend_k": None, "watch": [], "rest": {}})
+        if (spec.get("bh") or {}).get("fold_mode") == "value":
+            op["fold_mode"] = "auto"
+    if not op:
+        return None
+    op["op"] = "set_bh"
+    c.takeall(r"(?:으로|로)\s*(?:바꿔|해|설정|변경|둬|놔)\s*(?:줘|주세요|봐)?|설정\s*(?:해)?\s*(?:줘)?|해\s*줘|변경|바꿔|켜|넣어|줘")
+    return op
+
+
 def parse_clause(text, model, spec, ctx):
     c = Clause(text)
     ops = []
@@ -750,6 +816,10 @@ def parse_clause(text, model, spec, ctx):
         if p:
             return [p], [], [], [], {}
         return [], ["어떤 값을 그릴지 알려주세요 (에너지, 반력, 변위, 응력, 접힘각, 하중-변위, 좌굴 계수, 고유진동수)"], [], [], {}
+    if spec.get("solver") == "bh" and not re.search(r"그래프|플롯|plot|graph", t):
+        bo = parse_bh(c, spec)
+        if bo:
+            return [bo], [], [], c.leftover(), {}
     if re.search(CP_WORD, t):
         r = parse_coupling(c, model, spec, ctx)
         if r is not None:

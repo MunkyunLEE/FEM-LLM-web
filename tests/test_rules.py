@@ -169,3 +169,18 @@ def test_unclear_sentences_are_not_marked_complete(text):
 def test_numeric_plane_snaps_to_nearest_nodes():
     ops, reply, info = run("cantilever_beam", "x=260 위치에 아래로 100 N")
     assert ops[0]["select"]["plane"]["at"] in (200.0, 300.0) and "맞췄습니다" in reply
+
+
+def test_bh_extra_settings_rules():
+    from fastapi.testclient import TestClient
+    from femweb import rules, server
+
+    c = TestClient(server.app)
+    c.post("/api/examples/miura")
+    c.post("/api/ops", json={"ops": [{"op": "set_solver", "solver": "bh"}]})
+    m, sp = server.S["base"], server.S["spec"]
+    assert rules.parse("L*/LF 2로 해줘", m, sp)[0][0]["Lstar_ratio"] == 2.0
+    assert rules.parse("바 면적 0.05", m, sp)[0][0]["bar_area"] == 0.05
+    assert rules.parse("반복 5회", m, sp)[0][0]["cycles"] == 5
+    assert rules.parse("B 대비 10%", m, sp)[0][0]["fold_percent"] == 10.0
+    assert rules.parse("부가 설정 모두 초기화", m, sp)[0][0]["bar_area"] is None
