@@ -28,6 +28,8 @@ BH_DEFAULT = {
     "contact": False,
     "gap": None,
     "tol": 3.0,
+    "plastic_hinge": False,
+    "hinge_mp_factor": 1.0,
     "cycles": 0,
     "cycle_back": 0.0,
     "use_mass": True,
@@ -78,7 +80,7 @@ def build(model, spec):
         "tri_bars": c["tri_bars"],
         "bar_yield": float(c["bar_yield"]) if c["bar_yield"] is not None else float(mat["yield"]) if mat.get("yield") else inf,
         "bar_H": float(c["bar_H"]) if c["bar_H"] else float(mat.get("hardening") or 0.0),
-        "fold_yield": inf if c["fold_yield"] is None else float(c["fold_yield"]),
+        "fold_yield": float(c["fold_yield"]) if c["fold_yield"] is not None else (float(c.get("hinge_mp_factor") or 1.0) * float(mat["yield"]) * t * t / 4.0 if c.get("plastic_hinge") and mat.get("yield") else inf),
         "fold_H": float(c["fold_H"] or 0.0),
         "bend_yield": inf if c["bend_yield"] is None else float(c["bend_yield"]),
         "bend_H": float(c["bend_H"] or 0.0),
@@ -327,6 +329,13 @@ def _fold_basis(m):
     return f"L* = {m.Lstar:g} mm ({kl})"
 
 
+def _hinge_basis(m):
+    y = m.p.get("fold_yield")
+    if y is None or not np.isfinite(float(y)):
+        return "탄성"
+    return f"탄소성: 길이당 항복 모멘트 {float(y):.4g} N·mm/mm, 경화 {float(m.p.get('fold_H') or 0):.4g} N·mm/rad/mm"
+
+
 def _summary_model(m):
     s = m.summary()
     return {
@@ -335,6 +344,7 @@ def _summary_model(m):
         "접힘 / 패널 휨 / 휨 엣지 힌지": [s["folds"], s["panel_bends"], s["edge_bends"]],
         "판 굽힘강성 B = Et³/12(1-ν²) (N·mm)": s["B"],
         "접힘 강성": _fold_basis(m),
+        "접힘 힌지": _hinge_basis(m),
         "자동 판정": m.note,
     }
 

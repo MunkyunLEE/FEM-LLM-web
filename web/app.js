@@ -1719,6 +1719,7 @@ function renderBH() {
   const c = st.spec.bh || {};
   if (document.activeElement !== $('bhLstar')) $('bhLstar').value = c.Lstar ?? '';
   $('bhContact').checked = !!c.contact;
+  $('bhPH').checked = !!c.plastic_hinge;
   $('bhCyc').checked = (c.cycles || 0) > 0;
   $('bhCycNBox').hidden = !((c.cycles || 0) > 0);
   if (document.activeElement !== $('bhCycN') && c.cycles > 0) $('bhCycN').value = c.cycles;
@@ -1878,6 +1879,7 @@ function bindBH() {
   const setbh = (o) => ops([{ op: 'set_bh', ...o }]);
   $('bhLstar').onchange = (e) => setbh({ Lstar: bhNum(e.target.value), fold_mode: 'auto' });
   $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
+  $('bhPH').onchange = (e) => setbh({ plastic_hinge: e.target.checked });
   $('bhCyc').onchange = (e) => {
     $('bhCycNBox').hidden = !e.target.checked;
     setbh(e.target.checked ? { cycles: Math.max(1, Math.round(bhNum($('bhCycN').value) || 3)) } : { cycles: 0, cycle_back: 0 });
@@ -1918,7 +1920,8 @@ const BH_EXTRA = [
   ['tri_bars', 'woodruff', '삼각형 바 식', ''],
   ['bar_yield', null, '바 항복 응력 (재료 대신)', 'MPa'],
   ['bar_H', 0, '바 경화 계수 (재료 대신)', 'MPa'],
-  ['fold_yield', null, '접힘 힌지 항복 모멘트', 'N·mm/mm'],
+  ['hinge_mp_factor', 1, '소성 힌지 m_p 배율 (주름선 약화)', ''],
+  ['fold_yield', null, '접힘 힌지 항복 모멘트 직접 값', 'N·mm/mm'],
   ['fold_H', 0, '접힘 힌지 경화', 'N·mm/rad/mm'],
   ['bend_yield', null, '휨 힌지 항복 모멘트', 'N·mm/mm'],
   ['bend_H', 0, '휨 힌지 경화', 'N·mm/rad/mm'],

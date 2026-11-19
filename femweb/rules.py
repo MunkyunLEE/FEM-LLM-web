@@ -785,6 +785,13 @@ def parse_bh(c, spec):
         op["use_mass"] = False
     elif c.take(r"질량\s*(?:포함|넣)"):
         op["use_mass"] = True
+    if c.take(r"소성\s*힌지\s*(?:를|을)?\s*(?:꺼|끄|해제|빼|없애)|탄성\s*힌지"):
+        op["plastic_hinge"] = False
+    elif c.take(r"소성\s*힌지|plastic\s*hinge"):
+        op["plastic_hinge"] = True
+    m = c.take(r"(?:m\s*_?\s*p|소성\s*모멘트)\s*(?:배율|계수|factor)\s*(?:를|을|은|는|=|:)?\s*" + NUM)
+    if m:
+        op["hinge_mp_factor"] = float(m.group(1))
     if c.take(r"merlin\s*2?\s*(?:식|면적)|merlin2"):
         op["tri_bars"] = "merlin2"
     elif c.take(r"woodruff"):

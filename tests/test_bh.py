@@ -268,3 +268,16 @@ def test_panel_energy_fields_sum_to_totals():
     assert len(r.nodes) == pm["nv"] and r.frames[-1]["U"].shape == (len(r.nodes), 3)
     assert f["energyDensity"].std() > 0
     assert "energyDensity" in r.field_names()
+
+
+def test_plastic_hinge_option_uses_material_yield():
+    from femweb.solvers import bh
+
+    assert c.post("/api/examples/miura").status_code == 200
+    ops = [{"op": "set_solver", "solver": "bh"}, {"op": "set_material", "name": "default", "E": 3000, "nu": 0.3, "rho": 1.2e-9, "yield": 1.0}, {"op": "set_bh", "plastic_hinge": True}]
+    assert c.post("/api/ops", json={"ops": ops}).status_code == 200
+    m = bh.build(server.S["base"], server.S["spec"])
+    assert abs(m.p["fold_yield"] - 1.0 * 0.5**2 / 4) < 1e-12
+    assert c.post("/api/solve").status_code == 200
+    s = server.S["result"].summary
+    assert "탄소성" in s["접힘 힌지"] and s["에너지 (늘림/접힘/휨/소성/접촉, N·mm)"][3] > 0

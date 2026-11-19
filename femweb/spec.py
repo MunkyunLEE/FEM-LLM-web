@@ -392,14 +392,14 @@ def apply_ops(spec, ops, model=None):
             log.append(f"주름 {n}개 → {ty}")
         elif k == "set_bh":
             cur = dict(spec.get("bh") or {})
-            for f in ("fold_mode", "Lstar", "Lstar_ratio", "fold_percent", "fold_k", "long_factor", "bar_area", "tri_bars", "bar_yield", "bar_H", "fold_yield", "fold_H", "bend_yield", "bend_H", "contact", "gap", "tol", "cycles", "cycle_back", "use_mass", "rest", "drivers", "targets", "plot3", "watch"):
+            for f in ("fold_mode", "Lstar", "Lstar_ratio", "fold_percent", "fold_k", "long_factor", "bar_area", "tri_bars", "bar_yield", "bar_H", "fold_yield", "fold_H", "bend_yield", "bend_H", "contact", "gap", "tol", "plastic_hinge", "hinge_mp_factor", "cycles", "cycle_back", "use_mass", "rest", "drivers", "targets", "plot3", "watch"):
                 if f not in op:
                     continue
                 v = op[f]
                 if f == "fold_mode":
                     if v not in ("auto", "percent", "value"):
                         raise ValueError("fold_mode 는 auto, percent, value 중 하나여야 합니다")
-                elif f in ("contact", "use_mass"):
+                elif f in ("contact", "use_mass", "plastic_hinge"):
                     v = bool(v)
                 elif f == "tri_bars":
                     if v not in ("woodruff", "merlin2"):
@@ -559,6 +559,10 @@ def warnings_for(spec, model):
     out = []
     if model is None:
         return out
+    if spec["solver"] == "bh" and (spec.get("bh") or {}).get("plastic_hinge") and (spec.get("bh") or {}).get("fold_yield") is None:
+        mats = spec.get("materials") or {}
+        if not any((v or {}).get("yield") for v in (mats.values() if isinstance(mats, dict) else mats)):
+            out.append("소성 힌지를 켰지만 재료 항복 응력이 없어 힌지는 탄성으로 계산합니다. 재료 · 단면에서 항복 응력을 넣으세요")
     if model.kind == "stl" and spec["solver"] == "barhinge":
         out.append("솔리드(STL) 모델은 바-힌지 솔버로 풀 수 없습니다")
     if model.kind == "obj" and spec["solver"] == "tensormesh":
