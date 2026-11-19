@@ -488,13 +488,13 @@ PRESETS = {
     "bh_kresling": {
         "title": "B3. [BH-web] 크레슬링 쌍안정 반복 하중 히스테리시스 (Tang 2026, 그림 12b 첫 칸)",
         "file": "bh_kresling.obj",
-        "note": "육각 a=1, h0=1, 회전 11π/18. E=1e4, 바 항복 200·H 1e3, 접힘 k=0.2·항복 0.02·H 0.001. 위면 z 변위 -0.1 ↔ 0.6 (압축 +) 왕복. 논문에 바 면적이 없어 A=0.045 로 맞춤(인장 끝 하중 -5). 가력·제하 모두 스냅(음의 강성) 구간",
+        "note": "육각 a=1, h0=1, 회전 11π/18. E=1e4, 바 항복 200·H 1e3, 접힘 k=0.2·항복 0.02·H 0.001. 위면 z 지정 변위 -0.6, 반복 5회, 되돌림 0.1 mm (-0.1 ↔ 0.6 왕복). 논문에 바 면적이 없어 A=0.045 로 맞춤(인장 끝 하중 -5). 가력·제하 모두 스냅(음의 강성) 구간",
         "prompts": [],
         "ops": [
             {"op": "set_solver", "solver": "bh"},
             {"op": "set_section", "group": "*", "thickness": 0.01},
             {"op": "set_material", "name": "default", "E": 10000, "nu": 0.3, "rho": 1e-9},
-            {"op": "set_bh", "fold_mode": "value", "fold_k": 0.2, "bar_area": 0.045, "bar_yield": 200, "bar_H": 1000, "fold_yield": 0.02, "fold_H": 0.001, "cycles": 5, "cycle_low": -0.1666667, "watch": ["0-6", "1-6"]},
+            {"op": "set_bh", "fold_mode": "value", "fold_k": 0.2, "bar_area": 0.045, "bar_yield": 200, "bar_H": 1000, "fold_yield": 0.02, "fold_H": 0.001, "cycles": 5, "cycle_back": 0.1, "watch": ["0-6", "1-6"]},
             {"op": "add_bc", "type": "pinned", "name": "아래 육각 고정", "select": {"plane": {"axis": "z", "at": "min"}}},
             {"op": "add_bc", "name": "위 육각 압축", "dofs": [3], "value": -0.6, "select": {"plane": {"axis": "z", "at": "max"}}},
             {"op": "set_step", "type": "static", "nlgeom": True, "increments": 60},

@@ -28,7 +28,7 @@ BH_DEFAULT = {
     "gap": None,
     "tol": 3.0,
     "cycles": 0,
-    "cycle_low": 0.0,
+    "cycle_back": 0.0,
     "use_mass": True,
     "rest": {},
     "drivers": [],
@@ -196,15 +196,17 @@ def _summary_model(m):
     }
 
 
-def cycle_amp(s, r=0.0):
-    s = s % 1.0
-    if r == 0:
-        return 1.0 - abs(1.0 - 2.0 * s)
-    if s < 0.25:
-        return s / 0.25
-    if s < 0.75:
-        return 1.0 - (1.0 - r) * (s - 0.25) / 0.5
-    return r * (1.0 - (s - 0.75) / 0.25)
+def cycle_path(lam, cyc, top, back):
+    if lam >= 1.0:
+        return 0.0 * top
+    q = (lam * cyc) % 1.0
+    if not np.any(back):
+        return top * (1.0 - abs(1.0 - 2.0 * q))
+    if q < 0.25:
+        return top * q / 0.25
+    if q < 0.75:
+        return top + (back - top) * (q - 0.25) / 0.5
+    return back * (1.0 - (q - 0.75) / 0.25)
 
 
 def solve(model, spec, progress=None):
@@ -236,11 +238,12 @@ def solve(model, spec, progress=None):
             raise ValueError("반복 하중(cycles)은 지정 변위가 있어야 합니다")
         dd = sorted(disp)
         vv = np.array([disp[q] for q in dd], float)
-        r = float(c.get("cycle_low") or 0.0)
-        path = (dd, lambda lam, vv=vv, cyc=cyc, r=r: vv * cycle_amp(lam * cyc, r) if lam < 1.0 else 0.0 * vv)
+        bk = float(c.get("cycle_back") or 0.0)
+        bb = np.where(vv != 0, -np.sign(vv) * bk, 0.0)
+        path = (dd, lambda lam, vv=vv, bb=bb, cyc=cyc: cycle_path(lam, cyc, vv, bb))
         disp = {}
-        n = n * (2 if r == 0 else 4) * cyc
-        msgs.append(f"지정 변위를 0 → 목표 → {'0' if r == 0 else f'목표×{r:g}'} → 0 으로 {cyc}회 반복합니다 (증분 {n})")
+        n = n * (2 if bk == 0 else 4) * cyc
+        msgs.append(f"지정 변위 반복 {cyc}회: 0 → 지정 변위 → {'0' if bk == 0 else f'반대 방향 {bk:g} mm → 0'} (증분 {n})")
     pb = Problem(m, fixed=fixed, disp=disp, force=force, rest=rest or None, contact=ct, path=path)
     if kind == "arclength":
         if not force:
@@ -277,7 +280,7 @@ def _static(m, rec, pb, c, msgs, kind):
     if len(ctrl):
         ref = pb.up.copy()
         if pb.path is not None:
-            ref[np.asarray(pb.path[0], int)] = np.asarray(pb.path[1](0.5 / max(int(c.get("cycles") or 1), 1)), float)
+            ref[np.asarray(pb.path[0], int)] = np.asarray(pb.path[1](0.25 / max(int(c.get("cycles") or 1), 1)), float)
         cdir[ctrl] = np.sign(ref[ctrl])
     for k in range(len(rec.lam)):
         U = rec.U[k].reshape(-1, 3)

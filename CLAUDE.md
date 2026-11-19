@@ -43,7 +43,7 @@
 ## BH-web (`bhweb/`, 솔버 `bh`)
 - 웹 무관 계산 패키지: `geom`(이면각 닫힌 식 경사·헤시안), `model`(BHModel, 주름 판정 classify, 자름 split_cuts), `core`(바·힌지 탄소성, 조립), `solve`(Problem, 적응 감쇠 뉴턴 + 에너지 선 탐색, MGDCM), `analysis`(modal, dof_analysis, rigid_fold_path, solution_space), `contact`(GeometricContact), `shapes`, `benchmarks`
 - 어댑터 `femweb/solvers/bh.py`, spec `creases`(엣지 "a-b" → fold/bend/cut), `bh`(설정), ops `set_crease`, `set_bh`, 서버 `/api/creases`, `/api/result/kin3d`
-- 삼각형 바 기본 Woodruff(`tri_bars`), 반복 하중 `cycles`, 모드 질량 `use_mass`
+- 삼각형 바 기본 Woodruff(`tri_bars`), 반복 하중 `cycles`·되돌림 `cycle_back`(mm), 모드 질량 `use_mass`
 - 예제 `bh_*`, 시험 `tests/test_bh.py` (약 15초)
 - 간이 `barhinge` 솔버는 그대로 둠
 

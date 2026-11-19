@@ -668,7 +668,9 @@ function renderLists() {
       ops([{ op: 'remove', id: b.id }]);
     };
     top.append(nm, x);
-    it.append(top, el('div', 'desc', `${p ? p.desc : '?'} · ${describeBC(b)} · 절점 ${p ? p.nodes.length : 0}개`));
+    const bh = st.spec.solver === 'bh' ? st.spec.bh || {} : {};
+    const cyc = b.value && bh.cycles > 0 ? ` · 반복 ${bh.cycles}회 (0 → ${b.value} → ${bh.cycle_back ? (b.value > 0 ? '-' : '+') + bh.cycle_back : '0'} → 0)` : '';
+    it.append(top, el('div', 'desc', `${p ? p.desc : '?'} · ${describeBC(b)} · 절점 ${p ? p.nodes.length : 0}개${cyc}`));
     const ed = el('div', 'edit');
     const inp = el('input');
     inp.type = 'number';
@@ -1711,7 +1713,7 @@ function renderBH() {
   $('bhGap').value = c.gap ?? '';
   $('bhGap').disabled = !c.contact;
   $('bhCycles').value = c.cycles || '';
-  $('bhCycLow').value = c.cycle_low || '';
+  $('bhCycBack').value = c.cycle_back || '';
   $('bhArea').value = c.bar_area ?? '';
   $('bhMass').checked = c.use_mass !== false;
   if (document.activeElement !== $('bhTargets')) $('bhTargets').value = (c.targets || []).join(', ');
@@ -1879,7 +1881,7 @@ function bindBH() {
   $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
   $('bhMass').onchange = (e) => setbh({ use_mass: e.target.checked });
   $('bhCycles').onchange = (e) => setbh({ cycles: Math.max(0, Math.round(bhNum(e.target.value) || 0)) });
-  $('bhCycLow').onchange = (e) => setbh({ cycle_low: bhNum(e.target.value) || 0 });
+  $('bhCycBack').onchange = (e) => setbh({ cycle_back: Math.abs(bhNum(e.target.value) || 0) });
   $('bhArea').onchange = (e) => setbh({ bar_area: bhNum(e.target.value) });
   const selFolds = () => [...BH.sel].filter((k) => (BH.edges.find((c) => ekey(c.edge) === k) || {}).type === 'fold');
   const targets = (n) => {
