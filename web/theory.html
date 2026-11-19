@@ -71,9 +71,10 @@ svg{max-width:100%;height:auto}
   <a class="sub" href="#fem-load">3-6. 하중과 구속</a>
   <a href="#barhinge">4. 바-힌지 모델</a>
   <a href="#bhweb">4b. BH-web 바-힌지</a>
-  <a class="sub" href="#bh-model">모델</a>
-  <a class="sub" href="#bh-solve">해법</a>
+  <a class="sub" href="#bh-model">모델과 수식</a>
+  <a class="sub" href="#bh-solve">해법과 후처리</a>
   <a class="sub" href="#bh-verify">논문 예제 비교</a>
+  <a class="sub" href="#bh-status">논문별 반영 현황</a>
   <a href="#hinge-fem">5. 접힘선을 FEM으로</a>
   <a href="#solid">6. 솔리드 (TensorMesh)</a>
   <a href="#verify">7. 검증 결과</a>
@@ -244,27 +245,80 @@ svg{max-width:100%;height:auto}
 <p>접힐 때 에너지가 막대(늘어남)·패널 휨·접힘선 중 어디에 쓰였는지 비율로 보여 줍니다. 미우라 예제에서 접힘선이 97.8%이고 막대 변형률이 10⁻⁵ 수준이면, 판이 거의 늘어나지 않고 접힘선만으로 접힌 "강체 접힘"에 가깝다는 뜻입니다.</p>
 
 <h2 id="bhweb">4b. BH-web 바-힌지 (오리가미 정밀 해석)</h2>
-<p>기존 간이 바-힌지와 따로 둔 새 솔버입니다(솔버 선택 "BH-web"). 계산 핵심은 웹과 무관한 파이썬 패키지 <code>bhweb</code> 에 있고, 논문 6편의 식을 그대로 옮겨 논문 예제와 비교했습니다.</p>
-<h3 id="bh-model">모델</h3>
-<ul>
-<li><b>패널</b>: 삼각형과 사각형만. 사각형은 N5B8(중심 절점 + 바 8개, Filipov 2017 식 5), 삼각형은 Woodruff 2020 식 4(바 강성 E·A<sub>T</sub>·t/L², 가장 긴 변에 a²/2 + 5/4 배)</li>
-<li><b>바</b>: 하나의 식으로 통일(MERLIN-PLAS, Tang 2026). 로그 변형률 ε = ln(L/L₀), τ = E·εₑ, 반환 사상 소성, 항복을 비우면 탄성</li>
-<li><b>힌지</b>: 선형 또는 탄소성. M = k(θₑ − θ₀), 항복 |M| = (Y + Hα)·L, 알고리즘 접선 kH/(k+H)</li>
-<li><b>설정</b>: E, ν, t, L*, 항복 응력, 기하 접촉. 접힘 강성 K<sub>F</sub> = 1/(L*/(L<sub>F</sub>B) + 1/(0.55B(L<sub>F</sub>/t)<sup>1/3</sup>)) (Filipov 2017), L<sub>F</sub> 는 각 주름 길이로 자동. L* 를 비우면 MERLIN2 기본값 L* = 3·L<sub>F</sub>. 바 면적과 패널 휨은 E, ν, t 로 계산. 재료의 항복 응력(과 경화 계수)이 바 소성에 쓰여 패널 소성을 봅니다. 힌지 소성, 바 면적 직접 지정, 반복 하중 같은 것은 문장(LLM·규칙)이나 예제로 넣는 부가 설정이고, 화면 왼쪽 아래 "부가 설정" 에 모여 보이며 ✕ 로 지웁니다</li>
-<li><b>패널 휨</b>: 사각형은 식 9(짧은 대각선, Σα 보정, 긴 대각선 100배), 삼각형 사이 휨 엣지는 k = 2B·L²/(A₁+A₂)</li>
-<li><b>주름 종류</b>: 접힘/휨/자름(절점 분리)/경계. 평평한 전개도는 내부 엣지를 모두 접힘, 입체는 OBJ <code>hinge_</code> 선과 꺾인 엣지(판정각 이상)를 접힘으로 자동 판정. 주름 편집 모드에서 상자 선택(왼→오 완전 포함, 오→왼 걸침, Shift 추가, Ctrl 제외)으로 바꿉니다</li>
-</ul>
-<h3 id="bh-solve">해법</h3>
-<ul>
-<li>이면각의 경사·헤시안은 닫힌 식(헤시안은 경사식의 전진 미분), 고정 희소 패턴 조립. 수치 미분과 1e-10 수준으로 일치</li>
-<li>변위·목표각 제어: 적응 감쇠 뉴턴(Tang 알고리즘 1) + 에너지 Armijo 선 탐색. 힘 제어: MGDCM 호장법</li>
-<li>반복 하중: <code>cycles</code> 회 만큼 지정 변위를 0 → 목표 → 0 으로 왕복</li>
-<li>기하 접촉: 마찰·감쇠 없이 IPC 장벽(최소 간격 = 평균 바 길이의 0.1%) + 이웃 패널 힌지각 장벽, 연속 충돌 검사로 걸음 제한. 결과에 관통 검사와 접촉 에너지 비율</li>
-<li>기본 그래프 두 개는 항상 나옵니다: 스텝-에너지(접힘, 접힘+바, 접힘+바+휨 = 전체, 소성) 와 하중-변위(지정 변위 자유도의 반력). 절점을 우클릭해 "변위 그래프" 를 누르면 그 절점의 ux·uy·uz 이력이 추가됩니다</li>
-<li>결과 컨투어: 기본은 변형 에너지 밀도(N·mm/mm²). 패널을 잘게 나눈 표시 메쉬 위에서 바·접힘 힌지·휨 힌지 각각의 저장 에너지를 그 요소 선분 주위로 퍼뜨립니다. 퍼짐은 가우스 꼴 exp(−(d/σ)²), σ = 0.2·√(패널 면적), 요소마다 적분이 그 요소 에너지와 같도록 정규화해서 컨투어를 면적분하면 전체 저장 에너지가 됩니다. 접힘 에너지가 크면 그 주름선 주위가, 바 에너지가 크면 그 바 주위가 높게 보입니다. 휨·접힘·늘림·누적 소성 일 밀도와 패널별 합도 따로 볼 수 있습니다</li>
-<li>모드: Kv = λv 또는 Kv = λMv(패널 질량을 사각형 1/5, 삼각형 1/3 씩), free-free 가능</li>
-<li>기구 해석: 패널을 강체로 둔 적합 행렬의 SVD 로 기구 수·자기 응력 수, 구동 주름을 목표각까지 예측(최소 노름) + 가우스-뉴턴 교정. 접힘 주름 3개를 고르면 해공간을 3D 로 그립니다</li>
-</ul>
+<p>기존 간이 바-힌지와 따로 둔 새 솔버입니다(솔버 선택 "BH-web"). 계산 핵심은 웹과 무관한 파이썬 패키지 <code>bhweb</code> 에 있습니다. 논문 6편을 바탕으로 만들었지만 모든 내용을 넣지는 않았고, 무엇을 넣고 무엇을 아직 안 넣었는지는 "논문별 반영 현황" 에 적었습니다.</p>
+<h3 id="bh-model">모델과 수식</h3>
+<p>아래 식은 <code>bhweb</code> 코드에 실제로 들어간 것만 적었습니다. 논문에 있지만 아직 넣지 않은 것은 맨 아래 "논문별 반영 현황" 표에 따로 정리했습니다. 기호: E 탄성계수, ν 푸아송비, t 두께, B = Et³/12(1−ν²) 판 굽힘강성.</p>
+
+<h4>1) 전체 에너지와 평형 (Liu & Paulino, MERLIN)</h4>
+<div class="eq">Π(x) = Σ<sub>바</sub> U<sub>b</sub> + Σ<sub>힌지</sub> U<sub>h</sub> − λ f<sup>T</sup>u<span class="n">총 퍼텐셜</span></div>
+<div class="eq">T = ∂Π/∂x , &nbsp; K = ∂²Π/∂x²<span class="n">내력과 접선 강성</span></div>
+<p class="where">절점 좌표 x 만 미지수(회전 자유도 없음). 힘 제어는 λ 를, 변위 제어는 지정 자유도를 단계별로 키웁니다.</p>
+
+<h4>2) 바 (Tang 2026 MERLIN-PLAS, 로그 변형률 탄소성)</h4>
+<div class="eq">λ<sub>s</sub> = L / L<sub>0</sub> , &nbsp; ε = ln λ<sub>s</sub> = ε<sub>e</sub> + ε<sub>p</sub> , &nbsp; τ = E ε<sub>e</sub><span class="n">신장비와 키르히호프 응력</span></div>
+<div class="eq">f = |τ<sup>tr</sup>| − (Y + H α) , &nbsp; Δγ = f / (E + H) , &nbsp; α ← α + Δγ<span class="n">반환 사상 (f &gt; 0 일 때)</span></div>
+<div class="eq">S = τ / λ<sub>s</sub><sup>2</sup> , &nbsp; C = (C<sub>b</sub> − 2τ) / λ<sub>s</sub><sup>4</sup> , &nbsp; C<sub>b</sub> = E (탄성) 또는 EH/(E+H) (소성)<span class="n">2차 PK 응력과 접선</span></div>
+<div class="eq">T<sub>b</sub> = A S d / L<sub>0</sub> , &nbsp; K<sub>b</sub> = A C L<sup>2</sup>/L<sub>0</sub><sup>3</sup> n n<sup>T</sup> + A S / L<sub>0</sub> I , &nbsp; U<sub>b</sub> = ½ A L<sub>0</sub> E ε<sub>e</sub><sup>2</sup><span class="n">바 내력·강성·저장 에너지</span></div>
+<p class="where">d 바 벡터, n = d/L. Y 는 재료 항복 응력, H 는 재료 경화 계수(비우면 탄성). 수치 안정을 위해 소성 접선은 1e-3 E 아래로 내려가지 않게 했습니다(수렴 해는 그대로).</p>
+
+<h4>3) 바 면적 (두께로 계산)</h4>
+<div class="eq">A<sub>X</sub> = t (H<sup>2</sup> − ν W<sup>2</sup>) / (2H(1−ν<sup>2</sup>)) , &nbsp; A<sub>Y</sub> = t (W<sup>2</sup> − ν H<sup>2</sup>) / (2W(1−ν<sup>2</sup>))<span class="n">사각 패널 변 (Filipov 2017 식 5)</span></div>
+<div class="eq">A<sub>D</sub> = t ν (H<sup>2</sup> + W<sup>2</sup>)<sup>3/2</sup> / (2HW(1−ν<sup>2</sup>))<span class="n">사각 패널 중심-꼭짓점 바 (N5B8)</span></div>
+<div class="eq">k<sub>bar</sub> = E A<sub>T</sub> t / L<sup>2</sup> → A = A<sub>T</sub> t / L , &nbsp; 가장 긴 변은 × (a<sup>2</sup>/2 + 5/4)<span class="n">삼각 패널 (Woodruff 2020 식 4)</span></div>
+<p class="where">W, H 는 사각형 마주 보는 변 길이의 평균. A<sub>T</sub> 는 삼각형 면적, a 는 나머지 두 변의 길이 비(긴 쪽/짧은 쪽). 공유 변은 양쪽 패널 몫을 더합니다. 부가 설정으로 MERLIN2 다각형 식 A = 2 S t / ((1−ν) Σ L<sub>i</sub>) 를 고를 수 있고, ν 가 커서 A<sub>X</sub>, A<sub>Y</sub> 가 음이 되는 것을 막으려고 0.05 t·변 길이를 하한으로 두었습니다(논문에는 없는 안전장치).</p>
+
+<h4>4) 이면각 (Liu & Paulino 닫힌 식)</h4>
+<div class="eq">θ ∈ [0, 2π) , &nbsp; 평면 = π , &nbsp; 힌지 절점 (i, j, k, l), 회전축 j–k<span class="n">이면각 정의</span></div>
+<div class="eq">∂θ/∂x<sub>i</sub> = |r<sub>kj</sub>| m / |m|<sup>2</sup> , &nbsp; ∂θ/∂x<sub>l</sub> = −|r<sub>kj</sub>| n / |n|<sup>2</sup> , &nbsp; ∂θ/∂x<sub>j</sub>, ∂θ/∂x<sub>k</sub> 는 투영 계수로<span class="n">경사</span></div>
+<p class="where">m = r<sub>ij</sub>×r<sub>kj</sub>, n = r<sub>kj</sub>×r<sub>kl</sub>. 헤시안은 이 경사식을 전진 모드 이중수로 정확히 미분해 얻습니다(유한 차분 없음). 수치 미분과 1e-10 수준으로 일치합니다. 증분 사이에는 2π 넘김을 풀어(unwrap) 같은 가지를 따라갑니다.</p>
+
+<h4>5) 힌지 (선형·탄소성, Tang 2026)</h4>
+<div class="eq">M = k (θ − θ<sub>p</sub>) , &nbsp; f = |M<sup>tr</sup>| − (Y<sub>h</sub> + H<sub>h</sub> α<sub>h</sub>) L , &nbsp; Δγ = f / (k + H<sub>h</sub> L)<span class="n">힌지 반환 사상</span></div>
+<div class="eq">T<sub>h</sub> = M ∇θ , &nbsp; K<sub>h</sub> = k<sub>t</sub> ∇θ ⊗ ∇θ + M ∇<sup>2</sup>θ , &nbsp; U<sub>h</sub> = ½ k (θ − θ<sub>p</sub>)<sup>2</sup><span class="n">힌지 내력·강성</span></div>
+<p class="where">θ<sub>p</sub> 는 처음에 θ<sub>0</sub>(처음 형상의 각, 휨은 부가 설정으로 평면 π). k<sub>t</sub> 는 탄성이면 k, 소성이면 k H<sub>h</sub> L/(k + H<sub>h</sub> L). 힌지 항복 Y<sub>h</sub>, H<sub>h</sub> 는 길이당 값으로 받아 힌지 길이 L 을 곱합니다(부가 설정, 기본은 탄성).</p>
+
+<h4>6) 패널 휨</h4>
+<div class="eq">K<sub>B</sub> = (0.55 − 0.42 Σα/π) B (D<sub>S</sub>/t)<sup>1/3</sup> , &nbsp; π/2 ≤ Σα ≤ π<span class="n">사각 패널 짧은 대각선 (Filipov 2017 식 9)</span></div>
+<p class="where">D<sub>S</sub> 짧은 대각선 길이, Σα 는 짧은 대각선 양 끝 꼭짓점의 (π − 내각) 합을 [π/2, π] 로 자른 값. N5B8 은 대각선마다 반쪽 힌지 2개라 각 K<sub>B</sub>/2, 긴 대각선은 × 100 (Filipov 권장 약 100배).</p>
+<div class="eq">k<sub>b</sub> = 2 B L<sup>2</sup> / (A<sub>1</sub> + A<sub>2</sub>)<span class="n">삼각형 사이 휨 엣지 (Woodruff 2020 식 11, ν=0 이면 Et³L²/6(A₁+A₂))</span></div>
+
+<h4>7) 접힘 강성 (Filipov 2017, MERLIN2 auto)</h4>
+<div class="eq">K<sub>ℓ</sub> = L<sub>F</sub> B / L* , &nbsp; K<sub>m</sub> = 0.55 B (L<sub>F</sub>/t)<sup>1/3</sup> , &nbsp; K<sub>F</sub> = 1 / (1/K<sub>ℓ</sub> + 1/K<sub>m</sub>)<span class="n">주름 하나의 회전 강성 (N·mm/rad)</span></div>
+<p class="where">L<sub>F</sub> 는 주름 길이(자동), L* 는 화면의 L* (mm). 비우면 MERLIN2 기본값 L* = 3·L<sub>F</sub> 를 주름마다 씁니다.</p>
+
+<h4>8) 질량 (모드 해석)</h4>
+<div class="eq">사각 패널: ρ t S / 5 씩 꼭짓점 4개 + 중심 1개 , &nbsp; 삼각 패널: ρ t S / 3 씩<span class="n">집중 질량</span></div>
+
+<h3 id="bh-solve">해법과 후처리</h3>
+<h4>변위·목표각 제어: 적응 감쇠 뉴턴 (Tang 2026 알고리즘 1 + 보강)</h4>
+<div class="eq">Δλ = β h<sub>0</sub> , &nbsp; K<sub>ff</sub> Δu = −R<sub>f</sub> , &nbsp; x ← x + a c Δu<span class="n">증분과 반복</span></div>
+<p class="where">수렴 실패 시 β 를 반으로, 감쇠 c 를 0.75 배로(하한 0.2) 줄이고 다시 시도합니다. Tang 알고리즘에 더해 (1) 증분 시작에 이전 수렴 상태의 강성으로 지정 변위 증분을 반영하는 접선 예측, (2) 이후는 할선 예측, (3) 매 반복 퍼텐셜 Π 의 Armijo 선 탐색(a 를 반씩 줄임, 하강 방향일 때만) 을 넣었습니다. 반복 하중은 지정 변위를 0 → 지정값 → (되돌림) → 0 으로 반복 횟수만큼 왕복합니다.</p>
+<h4>힘 제어: MGDCM (Leon 2014, MERLIN)</h4>
+<div class="eq">δu<sub>F</sub> = K<sup>−1</sup> f , &nbsp; δu<sub>R</sub> = K<sup>−1</sup> R<span class="n">반복마다 두 방향</span></div>
+<div class="eq">첫 반복: δλ = ± Δλ<sub>0</sub> r √|δu<sub>F,1</sub><sup>T</sup>δu<sub>F,1</sub> / δu<sub>F</sub><sup>T</sup>δu<sub>F</sub>| , &nbsp; 이후: δλ = −δu<sub>F,first</sub><sup>T</sup>δu<sub>R</sub> / δu<sub>F,first</sub><sup>T</sup>δu<sub>F</sub><span class="n">일반 변위 제어</span></div>
+<p class="where">부호는 직전 증분 접선과의 내적으로 정하고, 반복 수에 따라 반경 r 을 늘리거나(×1.25) 줄입니다.</p>
+<h4>모드·자유도·기구 해석</h4>
+<div class="eq">K v = λ v &nbsp; 또는 &nbsp; K v = λ M v<span class="n">모드 (free-free 가능)</span></div>
+<div class="eq">C = ∂g/∂x , &nbsp; g = [바 길이, 접힘이 아닌 힌지 각] , &nbsp; 기구 수 = n<sub>dof</sub> − rank C − (구속 없으면 6) , &nbsp; 자기 응력 수 = n<sub>g</sub> − rank C<span class="n">패널 강체 가정 (SVD, 상대 허용 1e-7)</span></div>
+<p class="where">강체 접힘 경로는 구동 주름 각 증분을 최소 노름 예측 Δx = C⁺[0; Δθ] 로 주고 가우스-뉴턴으로 g 를 맞춥니다. 미우라에서 tan(ρ곧은/2)/tan(ρ지그재그/2) = cos γ 가 1e-8 이하로 맞습니다.</p>
+<h4>기하 접촉 (마찰·감쇠 없음)</h4>
+<div class="eq">b(d) = −(d − d̂)<sup>2</sup> ln(d/d̂) &nbsp; (d &lt; d̂) , &nbsp; d̂ = 평균 바 길이의 0.1 %<span class="n">IPC 장벽 (면 사이)</span></div>
+<p class="where">이웃 패널은 꼭짓점을 공유해 IPC 에서 빠지므로, 힌지마다 d = h·θ, h·(2π−θ) (h 는 날개 높이) 에 같은 장벽을 따로 둡니다. 걸음마다 연속 충돌 검사로 관통 전까지만 움직입니다.</p>
+<h4>결과 컨투어 (요소 에너지 분포)</h4>
+<div class="eq">e(p) = Σ<sub>요소</sub> U<sub>e</sub> w<sub>e</sub>(p) , &nbsp; w<sub>e</sub>(p) ∝ exp(−(d<sub>e</sub>(p)/σ)<sup>2</sup>) , &nbsp; ∫ w<sub>e</sub> dA = 1 , &nbsp; σ = 0.2 √A<sub>패널</sub><span class="n">변형 에너지 밀도 (N·mm/mm²)</span></div>
+<p class="where">d<sub>e</sub>(p) 는 표시 점에서 요소 선분(바, 힌지 축)까지 거리. 요소 에너지는 Ub, Uh 그대로라 ∫e dA = 전체 저장 에너지입니다. 기본 그래프 두 개(스텝-에너지: 접힘, 접힘+바, 접힘+바+휨, 소성 / 하중-변위)는 항상 나오고, 절점 우클릭으로 변위 이력을 뽑습니다.</p>
+
+<h3 id="bh-status">논문별 반영 현황</h3>
+<table>
+<tr><th>논문</th><th>반영</th><th>아직 안 넣은 것</th></tr>
+<tr><td>Filipov 외 2017 (N5B8)</td><td>바 면적 식 5, 패널 휨 식 9, 접힘 K<sub>ℓ</sub>·K<sub>m</sub> 직렬, 고유치·밴드 구조 확인</td><td>대변형 초선형 패널 휨 (M ∝ θ<sup>4/3</sup>), N4B5·N4B6 선택</td></tr>
+<tr><td>Liu & Paulino 2016 (MERLIN)</td><td>비선형 정식화, MGDCM</td><td>Ogden 초탄성 바(로그 변형률로 통일), 강화 선형 힌지(θ<sub>1</sub>, θ<sub>2</sub> 밖에서 발산하는 국부 관통 방지 — 기하 접촉으로 대신)</td></tr>
+<tr><td>Liu & Paulino 2018 (MERLIN2)</td><td>auto 모드(E, ν, t, L*; 기본 L*/L<sub>F</sub> = 3), ZeroBend(그대로/평면), 변위 하중, OBJ, 다각형 균일 바 면적(삼각형 선택)</td><td>5각형 이상 다각형과 내부점 X*(삼·사각형만 받기로 함), auto 모드의 초선형 휨</td></tr>
+<tr><td>Tang 외 2026 (MERLIN-PLAS)</td><td>바·힌지 반환 사상, 알고리즘 접선, 적응 감쇠 뉴턴, 단일 주름, 크레슬링 반복(정성 일치)</td><td>Sareh 비틀림·모프·쌍안정 미우라 예제, 힌지 Y·H 가 길이당인지 총합인지 확인 못 함, 크레슬링 바 면적(논문에 없음)</td></tr>
+<tr><td>Woodruff & Filipov 2020</td><td>삼각형 바 식 4, 휨 식 11, 띠 인장·굽힘·면내 시험</td><td>비틀림 2배 차이 원인, 원뿔·부채 예제, 곡선 주름 재분할</td></tr>
+<tr><td>Khawale 외 2026 (키리가미)</td><td>자름 = 절점 분리</td><td>바 보정 F<sub>s</sub> = 0.85, 휨 보정 F<sub>B</sub> = 0.125, 자름 끝 3절점 면내 회전 스프링 U = ½k<sub>R</sub>(α−α<sub>0</sub>)<sup>2</sup></td></tr>
+</table>
+
 <h3 id="bh-verify">논문 예제 비교</h3>
 <table>
 <tr><th>예제 (프리셋)</th><th>논문</th><th>BH-web</th></tr>
