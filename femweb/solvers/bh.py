@@ -28,6 +28,7 @@ BH_DEFAULT = {
     "gap": None,
     "tol": 3.0,
     "cycles": 0,
+    "cycle_low": 0.0,
     "use_mass": True,
     "rest": {},
     "drivers": [],
@@ -195,6 +196,17 @@ def _summary_model(m):
     }
 
 
+def cycle_amp(s, r=0.0):
+    s = s % 1.0
+    if r == 0:
+        return 1.0 - abs(1.0 - 2.0 * s)
+    if s < 0.25:
+        return s / 0.25
+    if s < 0.75:
+        return 1.0 - (1.0 - r) * (s - 0.25) / 0.5
+    return r * (1.0 - (s - 0.75) / 0.25)
+
+
 def solve(model, spec, progress=None):
     st = spec["step"]
     kind = st["type"]
@@ -224,10 +236,11 @@ def solve(model, spec, progress=None):
             raise ValueError("반복 하중(cycles)은 지정 변위가 있어야 합니다")
         dd = sorted(disp)
         vv = np.array([disp[q] for q in dd], float)
-        path = (dd, lambda lam, vv=vv, cyc=cyc: vv * (1.0 - abs(1.0 - 2.0 * ((lam * cyc) % 1.0))) if lam < 1.0 else 0.0 * vv)
+        r = float(c.get("cycle_low") or 0.0)
+        path = (dd, lambda lam, vv=vv, cyc=cyc, r=r: vv * cycle_amp(lam * cyc, r) if lam < 1.0 else 0.0 * vv)
         disp = {}
-        n = n * 2 * cyc
-        msgs.append(f"지정 변위를 0 → 목표 → 0 으로 {cyc}회 반복합니다 (증분 {n})")
+        n = n * (2 if r == 0 else 4) * cyc
+        msgs.append(f"지정 변위를 0 → 목표 → {'0' if r == 0 else f'목표×{r:g}'} → 0 으로 {cyc}회 반복합니다 (증분 {n})")
     pb = Problem(m, fixed=fixed, disp=disp, force=force, rest=rest or None, contact=ct, path=path)
     if kind == "arclength":
         if not force:
@@ -243,7 +256,7 @@ def solve(model, spec, progress=None):
 
 def _static(m, rec, pb, c, msgs, kind):
     res = _base(m, "static")
-    keys = ("time", "load_factor", "energy.stretch", "energy.fold", "energy.bend", "energy.plastic", "energy.contact", "energy.total", "energy.external", "reaction.x", "reaction.y", "reaction.z", "u.control", "u.max", "fold.mean", "contact.pairs", "iterations")
+    keys = ("time", "load_factor", "energy.stretch", "energy.fold", "energy.bend", "energy.plastic", "energy.contact", "energy.total", "energy.external", "reaction.x", "reaction.y", "reaction.z", "reaction.control", "u.control", "u.max", "fold.mean", "contact.pairs", "iterations")
     hist = {k: [] for k in keys}
     watch = [parse_key(k) for k in (c.get("watch") or [])]
     widx = []
@@ -289,6 +302,7 @@ def _static(m, rec, pb, c, msgs, kind):
         for q, nm in enumerate("xyz"):
             hist[f"reaction.{nm}"].append(r[q])
         hist["u.control"].append(float((rec.U[k] * cdir)[ctrl].mean()) if len(ctrl) else 0.0)
+        hist["reaction.control"].append(float((rec.react[k] * cdir)[ctrl].sum()) if len(ctrl) else 0.0)
         hist["u.max"].append(float(np.linalg.norm(U, axis=1).max()))
         hist["fold.mean"].append(float(np.degrees(np.abs(th[fold] - m.th_init[fold])).mean()) if fold.any() else 0.0)
         hist["contact.pairs"].append(float(rec.contact[k].get("pairs", 0) + rec.contact[k].get("hinge_pairs", 0)) if rec.contact[k] else 0.0)

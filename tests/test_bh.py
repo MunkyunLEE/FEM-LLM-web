@@ -220,27 +220,26 @@ def test_filipov_flat_miura_five_fold_modes():
     assert lam[4] < 1e-3 and lam[5] > 100 * lam[4]
 
 
-def test_kresling_cyclic_shakedown():
-    from bhweb.shapes import kresling
-
-    X, F, mo, va, b, t = kresling()
-    p = {"E": 1e4, "bar_area": 0.01, "fold_mode": "value", "fold_k": 0.2, "bar_yield": 200, "bar_H": 1e3, "fold_yield": 0.02, "fold_H": 0.1}
-    m = BHModel(X, F, crease_edges=mo + va, params=p)
-    fixed = [3 * i + q for i in b for q in range(3)]
-    cyc = 3
-    tri = lambda s: 1 - abs(1 - 2 * (s % 1.0))
-    path = ([3 * i + 2 for i in t], lambda lam: [-0.6 * tri(lam * cyc)] * len(t))
-    rec = solve_displacement(m, Problem(m, fixed=fixed, path=path), steps=200 * cyc)
-    u = np.array([U[3 * t[0] + 2] for U in rec.U])
-    f = np.array([sum(R[3 * i + 2] for i in t) for R in rec.react])
-    lam = np.array(rec.lam)
+def test_kresling_bistable_hysteresis_like_tang_fig12():
+    assert c.post("/api/examples/bh_kresling").status_code == 200
+    assert c.post("/api/solve").status_code == 200
+    res = server.S["result"]
+    h = res.history if hasattr(res, "history") else res["history"]
+    u = np.array(h["u.control"])
+    f = np.array(h["reaction.control"])
+    lam = np.array(h["time"])
+    cyc = 5
     loops = []
     for k in range(cyc):
-        s = (lam >= k / cyc - 1e-12) & (lam <= (k + 1) / cyc + 1e-12)
-        loops.append(np.trapezoid(f[s], u[s]))
-    assert loops[0] > 5 * loops[1] > 25 * loops[2] > 0
-    E = rec.E[-1]
-    assert abs(sum(E.values()) - rec.extwork[-1]) < 0.03 * rec.extwork[-1]
+        s = (lam >= k / cyc - 1e-9) & (lam <= (k + 1) / cyc + 1e-9)
+        loops.append(abs(np.trapezoid(f[s], u[s])))
+        up = s & (lam <= (k + 0.25) / cyc + 1e-9) & (u > 0.03)
+        assert (np.diff(f[up]) < 0).any()
+        dn = s & (lam >= (k + 0.25) / cyc) & (lam <= (k + 0.75) / cyc) & (u > 0.05)
+        assert (np.diff(f[dn]) > 0).any()
+    assert -6.0 < f[np.argmin(u)] < -4.5
+    assert all(a > 0.5 for a in loops)
+    assert abs(h["energy.total"][-1] - h["energy.external"][-1]) < 0.01 * h["energy.external"][-1]
 
 
 def test_roll_contact_jams_without_penetration():

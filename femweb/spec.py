@@ -392,7 +392,7 @@ def apply_ops(spec, ops, model=None):
             log.append(f"주름 {n}개 → {ty}")
         elif k == "set_bh":
             cur = dict(spec.get("bh") or {})
-            for f in ("fold_mode", "Lstar", "Lstar_ratio", "fold_percent", "fold_k", "long_factor", "bar_area", "tri_bars", "bar_yield", "bar_H", "fold_yield", "fold_H", "bend_yield", "bend_H", "contact", "gap", "tol", "cycles", "use_mass", "rest", "drivers", "targets", "plot3", "watch"):
+            for f in ("fold_mode", "Lstar", "Lstar_ratio", "fold_percent", "fold_k", "long_factor", "bar_area", "tri_bars", "bar_yield", "bar_H", "fold_yield", "fold_H", "bend_yield", "bend_H", "contact", "gap", "tol", "cycles", "cycle_low", "use_mass", "rest", "drivers", "targets", "plot3", "watch"):
                 if f not in op:
                     continue
                 v = op[f]
@@ -410,6 +410,10 @@ def apply_ops(spec, ops, model=None):
                     v = [("%d-%d" % tuple(sorted(int(q) for q in e))) if not isinstance(e, str) else e for e in (v or [])]
                 elif f == "targets":
                     v = [float(q) for q in (v or [])]
+                elif f == "cycle_low":
+                    v = _num(v or 0.0, f)
+                    if not -10.0 <= v <= 1.0:
+                        raise ValueError("cycle_low 는 목표 변위 대비 비율로 -10 ~ 1 사이여야 합니다")
                 elif v is not None:
                     v = _num(v, f)
                     if v < 0:

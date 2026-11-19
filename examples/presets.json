@@ -1817,9 +1817,9 @@
   ]
  },
  "bh_kresling": {
-  "title": "B3. [BH-web] 크레슬링 반복 압축 히스테리시스 (Tang 2026, 그림 12)",
+  "title": "B3. [BH-web] 크레슬링 쌍안정 반복 하중 히스테리시스 (Tang 2026, 그림 12b 첫 칸)",
   "file": "bh_kresling.obj",
-  "note": "육각 a=1, h0=1, 회전 11π/18. E=1e4, A=0.01, 바 항복 200·H 1e3, 접힘 k=0.2·항복 0.02·H 0.1. 위면 z -0.6 왕복 3회. 루프 면적이 회마다 줄어드는 소성 셰이크다운",
+  "note": "육각 a=1, h0=1, 회전 11π/18. E=1e4, 바 항복 200·H 1e3, 접힘 k=0.2·항복 0.02·H 0.001. 위면 z 변위 -0.1 ↔ 0.6 (압축 +) 왕복. 논문에 바 면적이 없어 A=0.045 로 맞춤(인장 끝 하중 -5). 가력·제하 모두 스냅(음의 강성) 구간",
   "prompts": [],
   "ops": [
    {
@@ -1842,12 +1842,17 @@
     "op": "set_bh",
     "fold_mode": "value",
     "fold_k": 0.2,
-    "bar_area": 0.01,
+    "bar_area": 0.045,
     "bar_yield": 200,
     "bar_H": 1000,
     "fold_yield": 0.02,
-    "fold_H": 0.1,
-    "cycles": 3
+    "fold_H": 0.001,
+    "cycles": 5,
+    "cycle_low": -0.1666667,
+    "watch": [
+     "0-6",
+     "1-6"
+    ]
    },
    {
     "op": "add_bc",
@@ -1878,17 +1883,32 @@
     "op": "set_step",
     "type": "static",
     "nlgeom": true,
-    "increments": 100
+    "increments": 60
    },
    {
     "op": "add_plot",
-    "title": "힘-변위 히스테리시스",
+    "title": "하중-변위 히스테리시스 (압축 +)",
     "x": {
      "quantity": "u.control"
     },
     "series": [
      {
-      "quantity": "reaction.z"
+      "quantity": "reaction.control"
+     }
+    ]
+   },
+   {
+    "op": "add_plot",
+    "title": "주름 회전",
+    "x": {
+     "quantity": "time"
+    },
+    "series": [
+     {
+      "quantity": "fold.e0-6"
+     },
+     {
+      "quantity": "fold.e1-6"
      }
     ]
    },
