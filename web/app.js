@@ -1711,6 +1711,7 @@ function renderBH() {
   $('bhGap').value = c.gap ?? '';
   $('bhGap').disabled = !c.contact;
   $('bhCycles').value = c.cycles || '';
+  $('bhCycLow').value = c.cycle_low || '';
   $('bhArea').value = c.bar_area ?? '';
   $('bhMass').checked = c.use_mass !== false;
   if (document.activeElement !== $('bhTargets')) $('bhTargets').value = (c.targets || []).join(', ');
@@ -1878,6 +1879,7 @@ function bindBH() {
   $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
   $('bhMass').onchange = (e) => setbh({ use_mass: e.target.checked });
   $('bhCycles').onchange = (e) => setbh({ cycles: Math.max(0, Math.round(bhNum(e.target.value) || 0)) });
+  $('bhCycLow').onchange = (e) => setbh({ cycle_low: bhNum(e.target.value) || 0 });
   $('bhArea').onchange = (e) => setbh({ bar_area: bhNum(e.target.value) });
   const selFolds = () => [...BH.sel].filter((k) => (BH.edges.find((c) => ekey(c.edge) === k) || {}).type === 'fold');
   const targets = (n) => {
