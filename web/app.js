@@ -1720,6 +1720,7 @@ function renderBH() {
   if (document.activeElement !== $('bhLstar')) $('bhLstar').value = c.Lstar ?? '';
   $('bhContact').checked = !!c.contact;
   $('bhCyc').checked = (c.cycles || 0) > 0;
+  $('bhCycNBox').hidden = !((c.cycles || 0) > 0);
   if (document.activeElement !== $('bhCycN') && c.cycles > 0) $('bhCycN').value = c.cycles;
   if (document.activeElement !== $('bhTargets')) $('bhTargets').value = (c.targets || []).join(', ');
   const kin = st.spec.step && st.spec.step.type === 'kinematic';
@@ -1877,8 +1878,11 @@ function bindBH() {
   const setbh = (o) => ops([{ op: 'set_bh', ...o }]);
   $('bhLstar').onchange = (e) => setbh({ Lstar: bhNum(e.target.value), fold_mode: 'auto' });
   $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
-  $('bhCyc').onchange = (e) => setbh(e.target.checked ? { cycles: Math.max(1, Math.round(bhNum($('bhCycN').value) || 3)) } : { cycles: 0, cycle_back: 0 });
-  $('bhCycN').onchange = (e) => { if ($('bhCyc').checked) setbh({ cycles: Math.max(1, Math.round(bhNum(e.target.value) || 1)) }); };
+  $('bhCyc').onchange = (e) => {
+    $('bhCycNBox').hidden = !e.target.checked;
+    setbh(e.target.checked ? { cycles: Math.max(1, Math.round(bhNum($('bhCycN').value) || 3)) } : { cycles: 0, cycle_back: 0 });
+  };
+  $('bhCycN').onchange = (e) => setbh({ cycles: Math.max(1, Math.round(bhNum(e.target.value) || 1)) });
   const selFolds = () => [...BH.sel].filter((k) => (BH.edges.find((c) => ekey(c.edge) === k) || {}).type === 'fold');
   const targets = (n) => {
     const t = $('bhTargets').value.split(/[,\s]+/).filter(Boolean).map(Number);
