@@ -2,6 +2,7 @@ import numpy as np
 
 from bhweb.analysis import dof_analysis, fold_angles, modal, null_modes, rigid_fold_path, solution_space
 from bhweb.contact import GeometricContact
+from bhweb.core import Assembler, State, evaluate
 from bhweb.model import BEND, FOLD, PANEL, BHModel
 from bhweb.solve import Problem, solve_displacement, solve_force
 
@@ -135,6 +136,92 @@ def _rest(m, c):
     return out
 
 
+PANEL_FIELDS = ("panelEnergy", "energyDensity", "bendDensity", "foldDensity", "stretchDensity", "plasticDensity")
+
+
+def _panel_map(m):
+    from scipy.sparse import csr_matrix
+
+    tp = []
+    for p, f in enumerate(m.faces):
+        tp += [p] * (4 if len(f) == 4 else 1)
+    tp = np.array(tp, int)
+    P = len(m.faces)
+    sets = [set() for _ in range(P)]
+    for t, p in zip(m.tris, tp):
+        sets[p].update(int(v) for v in t)
+    X = m.X
+    tr = m.tris
+    ar = 0.5 * np.linalg.norm(np.cross(X[tr[:, 1]] - X[tr[:, 0]], X[tr[:, 2]] - X[tr[:, 0]]), axis=1)
+    area = np.maximum(np.bincount(tp, ar, P), 1e-30)
+    owner = {}
+    for p, sv in enumerate(sets):
+        for v in sv:
+            owner.setdefault(v, []).append(p)
+    r, cc, w = [], [], []
+    for q, (a, b) in enumerate(m.bars):
+        ps = [p for p in owner.get(int(a), []) if int(b) in sets[p]]
+        for p in ps:
+            r.append(p)
+            cc.append(q)
+            w.append(1.0 / len(ps))
+    Bm = csr_matrix((w, (r, cc)), shape=(P, len(m.bars)))
+    r, cc, w = [], [], []
+    for q, (i, j, k, l) in enumerate(m.h):
+        pa = [p for p in owner.get(int(j), []) if int(k) in sets[p] and int(i) in sets[p]][:1]
+        pb = [p for p in owner.get(int(j), []) if int(k) in sets[p] and int(l) in sets[p]][:1]
+        ps = pa + [p for p in pb if p not in pa]
+        for p in ps:
+            r.append(p)
+            cc.append(q)
+            w.append(1.0 / len(ps))
+    Hm = csr_matrix((w, (r, cc)), shape=(P, len(m.h)))
+    vid, pv, tris, first = [], [], [], {}
+    for p in range(P):
+        loc = {}
+        for v in sorted(sets[p]):
+            loc[v] = len(vid)
+            first.setdefault(v, len(vid))
+            vid.append(v)
+            pv.append(p)
+        for t in tr[tp == p]:
+            tris.append([loc[int(v)] for v in t])
+    return {"P": P, "area": area, "B": Bm, "H": Hm, "fold": (m.hkind == FOLD).astype(float), "vid": np.array(vid, int), "pv": np.array(pv, int), "tris": np.array(tris, int).reshape(-1, 3), "first": first}
+
+
+def _panel_fields(pm, Ub, Uh, Wb=None, Wh=None):
+    Ub = np.asarray(Ub, float)
+    Uh = np.asarray(Uh, float)
+    fo = pm["fold"]
+    st = pm["B"] @ Ub / pm["area"]
+    fd = pm["H"] @ (Uh * fo) / pm["area"] if len(Uh) else np.zeros(pm["P"])
+    bd = pm["H"] @ (Uh * (1 - fo)) / pm["area"] if len(Uh) else np.zeros(pm["P"])
+    out = {"energyDensity": st + fd + bd, "panelEnergy": (st + fd + bd) * pm["area"], "bendDensity": bd, "foldDensity": fd, "stretchDensity": st}
+    if Wb is not None:
+        out["plasticDensity"] = (pm["B"] @ np.asarray(Wb, float) + (pm["H"] @ np.asarray(Wh, float) if len(Wh) else 0.0)) / pm["area"]
+    return out
+
+
+def _elastic_parts(m, asm, x):
+    _, _, out = evaluate(m, asm, x, State(m), False)
+    return out.get("Ub", np.zeros(len(m.bars))), out.get("Uh", np.zeros(len(m.h)))
+
+
+def _expand(res, pm):
+    vid = pm["vid"]
+    pv = pm["pv"]
+    res.nodes = res.nodes[vid]
+    res.tris = pm["tris"]
+    fm = pm["first"]
+    res.lines = np.array([[fm[int(a)], fm[int(b)]] for a, b in res.lines if int(a) in fm and int(b) in fm], int).reshape(-1, 2)
+    res.fedges = np.array([[fm[int(a)], fm[int(b)]] for a, b in res.fedges if int(a) in fm and int(b) in fm], int).reshape(-1, 2)
+    for f in res.frames:
+        f["U"] = f["U"][vid]
+        f["fields"] = {k: (v[pv] if k in PANEL_FIELDS else v[vid]) for k, v in f["fields"].items()}
+    res.node_map = vid.tolist()
+    return res
+
+
 def _frame_fields(m, x, st):
     d = x[m.bars[:, 1]] - x[m.bars[:, 0]]
     eps = np.abs(np.log(np.linalg.norm(d, axis=1) / m.L0))
@@ -259,6 +346,7 @@ def solve(model, spec, progress=None):
 
 def _static(m, rec, pb, c, msgs, kind):
     res = _base(m, "static")
+    pm = _panel_map(m)
     keys = ("time", "load_factor", "energy.stretch", "energy.fold", "energy.bend", "energy.plastic", "energy.contact", "energy.total", "energy.external", "reaction.x", "reaction.y", "reaction.z", "reaction.control", "u.control", "u.max", "fold.mean", "contact.pairs", "iterations")
     hist = {k: [] for k in keys}
     watch = [parse_key(k) for k in (c.get("watch") or [])]
@@ -291,6 +379,7 @@ def _static(m, rec, pb, c, msgs, kind):
         r = [float(T[pres[pres % 3 == q]].sum()) for q in range(3)]
         th = rec.th[k]
         f = _frame_fields(m, x, None)
+        f.update(_panel_fields(pm, rec.Ub[k], rec.Uh[k], rec.Wb[k], rec.Wh[k]))
         res.add_frame(f"λ {lam:.4g}", lam, U, f)
         hist["time"].append(lam)
         hist["load_factor"].append(lam)
@@ -313,6 +402,7 @@ def _static(m, rec, pb, c, msgs, kind):
         for e, i in widx:
             hist[f"fold.e{ekey(e)}"].append(float(np.degrees(th[i])))
             hist[f"moment.e{ekey(e)}"].append(float(rec.M[k][i]))
+    hist["energy.bar"] = list(hist["energy.stretch"])
     sf = rec.state
     res.frames[-1]["fields"].update({kk: v for kk, v in _frame_fields(m, rec.x, sf).items() if kk in ("hingePlastic", "barPlastic")})
     res.history = hist
@@ -337,13 +427,15 @@ def _static(m, rec, pb, c, msgs, kind):
         s["참고"] = msgs
     res.summary = s
     res.log = "\n".join(msgs)
-    return res
+    return _expand(res, pm)
 
 
 def _modal(m, fixed, n, msgs, want_mass=True):
     use_mass = want_mass and bool(np.all(m.mass > 0))
     r = modal(m, fixed=fixed, n=n + (0 if fixed else 6), use_mass=use_mass)
     res = _base(m, "modal")
+    pm = _panel_map(m)
+    asm = Assembler(m)
     span = float(np.ptp(m.X, axis=0).max())
     hist = {"mode": [], "eigenvalue": []}
     if use_mass:
@@ -351,7 +443,9 @@ def _modal(m, fixed, n, msgs, want_mass=True):
     for k in range(len(r["eig"])):
         sh = r["shapes"][k] * 0.1 * span
         lab = f"모드 {k + 1} ({r['freq'][k]:.5g} Hz)" if use_mass else f"모드 {k + 1} (λ {r['eig'][k]:.5g})"
-        res.add_frame(lab, float(r["freq"][k] if use_mass else r["eig"][k]), sh, _frame_fields(m, m.X + sh, None))
+        fk = _frame_fields(m, m.X + sh, None)
+        fk.update(_panel_fields(pm, *_elastic_parts(m, asm, m.X + sh)))
+        res.add_frame(lab, float(r["freq"][k] if use_mass else r["eig"][k]), sh, fk)
         hist["mode"].append(k + 1)
         hist["eigenvalue"].append(float(r["eig"][k]))
         if use_mass:
@@ -371,7 +465,7 @@ def _modal(m, fixed, n, msgs, want_mass=True):
     if msgs:
         s["참고"] = msgs
     res.summary = s
-    return res
+    return _expand(res, pm)
 
 
 def _kinematic(m, fixed, c, steps, msgs):
@@ -395,13 +489,17 @@ def _kinematic(m, fixed, c, steps, msgs):
         msgs.append(f"기구 자유도 {da['mechanisms']} 보다 구동 주름이 적어 최소 노름 해로 나머지를 정했습니다")
     p = rigid_fold_path(m, drv, tg, steps=steps, fixed=fixed or None)
     res = _base(m, "static")
+    pm = _panel_map(m)
+    asm = Assembler(m)
     hist = {"time": [], "constraint.error": [], "energy.fold": [], "energy.total": []}
     for i in fi:
         hist[f"fold.e{ekey(m.hedge[i])}"] = []
     n = len(p["x"])
     for k in range(n):
         x = p["x"][k]
-        res.add_frame(f"단계 {k}/{n - 1}", k / max(n - 1, 1), x - m.X, _frame_fields(m, x, None))
+        fk = _frame_fields(m, x, None)
+        fk.update(_panel_fields(pm, *_elastic_parts(m, asm, x)))
+        res.add_frame(f"단계 {k}/{n - 1}", k / max(n - 1, 1), x - m.X, fk)
         hist["time"].append(k / max(n - 1, 1))
         hist["constraint.error"].append(float(p["err"][k - 1]) if k else 0.0)
         ef = float(0.5 * np.sum(m.hk[fi] * (p["angles"][k][fi] - m.th0[fi]) ** 2))
@@ -427,4 +525,4 @@ def _kinematic(m, fixed, c, steps, msgs):
     if msgs:
         s["참고"] = msgs
     res.summary = s
-    return res
+    return _expand(res, pm)

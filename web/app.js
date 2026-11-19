@@ -448,8 +448,9 @@ async function loadResult() {
   $('frame').value = R.index;
   const fsel = $('field');
   fsel.innerHTML = '';
-  for (const f of st.result.fields) fsel.append(new Option(f, f));
-  R.field = kind === 'static' && st.result.fields.includes('vonMises') ? 'vonMises' : st.result.fields.includes('foldRotation') ? 'foldRotation' : 'U';
+  for (const f of st.result.fields) fsel.append(new Option(FIELD_LABEL[f] || f, f));
+  const pref = (kind === 'static' ? ['vonMises', 'energyDensity', 'foldRotation'] : ['energyDensity', 'foldRotation']).find((q) => st.result.fields.includes(q));
+  R.field = pref || 'U';
   fsel.value = R.field;
   R.auto = true;
   $('resultbar').hidden = false;
@@ -511,7 +512,7 @@ async function showFrame() {
   placeRigid(st.result.kind === 'static' && $('showResult').checked ? R.scale * f.time : 0);
   $('frameLabel').textContent = `${R.index + 1}/${st.result.frames.length} · ${f.label}`;
   $('legend').hidden = !$('showResult').checked;
-  $('legendTitle').textContent = R.field;
+  $('legendTitle').textContent = FIELD_LABEL[R.field] || R.field;
   const ticks = $('legendTicks');
   ticks.innerHTML = '';
   for (let k = 4; k >= 0; k--) ticks.append(el('span', '', fmt(lo + (span * k) / 4)));
@@ -1643,6 +1644,7 @@ function bind() {
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
+const FIELD_LABEL = { energyDensity: '변형 에너지 밀도 (N·mm/mm²)', panelEnergy: '패널 저장 에너지 (N·mm)', bendDensity: '패널 휨 에너지 밀도', foldDensity: '접힘 에너지 밀도', stretchDensity: '바 늘림 에너지 밀도', plasticDensity: '누적 소성 일 밀도', foldRotation: '접힘 회전 (도)', barStrain: '바 변형률', hingePlastic: '힌지 소성 회전 (도)', barPlastic: '바 소성 변형률' };
 const BH = { edges: [], note: '', sel: new Set(), edit: false, drag: null, k3: null };
 const BH_COL = { fold: 0xff6b5e, bend: 0x5ec8ff, cut: 0xffd84a, boundary: 0x7d8a99 };
 const BH_NAME = { fold: '접힘', bend: '휨', cut: '자름', boundary: '경계' };

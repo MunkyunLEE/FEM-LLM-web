@@ -63,6 +63,10 @@ class Recorder:
         self.iters = []
         self.extwork = [0.0]
         self.contact = []
+        self.Ub = []
+        self.Uh = []
+        self.Wb = []
+        self.Wh = []
 
     def add(self, lam, x, st, out, T, it, cinfo=None):
         m = self.pb.m
@@ -83,6 +87,10 @@ class Recorder:
         self.M.append(out.get("M", np.zeros(0)).copy())
         self.iters.append(int(it))
         self.contact.append(cinfo or {})
+        self.Ub.append(np.asarray(out.get("Ub", np.zeros(len(m.L0))), float).copy())
+        self.Uh.append(np.asarray(out.get("Uh", np.zeros(len(m.h))), float).copy())
+        self.Wb.append(np.asarray(st.wpb, float).copy())
+        self.Wh.append(np.asarray(st.wph, float).copy())
 
     def _fext(self, lam, T):
         f = lam * self.pb.F.copy()

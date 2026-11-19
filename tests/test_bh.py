@@ -249,3 +249,22 @@ def test_roll_contact_jams_without_penetration():
     s = c.get("/api/state").json()["result"]["summary"]
     assert s["관통 검사"] == "없음"
     assert s["접촉 (쌍 / 힌지 / 최소 거리)"][0] >= 1
+
+
+def test_panel_energy_fields_sum_to_totals():
+    from femweb.solvers import bh
+
+    assert c.post("/api/examples/miura").status_code == 200
+    c.post("/api/ops", json={"ops": [{"op": "set_solver", "solver": "bh"}]})
+    assert c.post("/api/solve").status_code == 200
+    r = server.S["result"]
+    m = bh.build(server.S["base"], server.S["spec"])
+    pm = bh._panel_map(m)
+    f = r.frames[-1]["fields"]
+    d = np.zeros(pm["P"])
+    d[pm["pv"]] = f["energyDensity"]
+    h = r.history
+    tot = h["energy.stretch"][-1] + h["energy.fold"][-1] + h["energy.bend"][-1]
+    assert abs((d * pm["area"]).sum() - tot) < 1e-9 * max(tot, 1)
+    assert len(r.nodes) == len(pm["vid"]) and r.frames[-1]["U"].shape == (len(r.nodes), 3)
+    assert "energyDensity" in r.field_names()
