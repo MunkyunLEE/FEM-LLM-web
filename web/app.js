@@ -1719,6 +1719,8 @@ function renderBH() {
   const c = st.spec.bh || {};
   if (document.activeElement !== $('bhLstar')) $('bhLstar').value = c.Lstar ?? '';
   $('bhContact').checked = !!c.contact;
+  $('bhCyc').checked = (c.cycles || 0) > 0;
+  if (document.activeElement !== $('bhCycN') && c.cycles > 0) $('bhCycN').value = c.cycles;
   if (document.activeElement !== $('bhTargets')) $('bhTargets').value = (c.targets || []).join(', ');
   const kin = st.spec.step && st.spec.step.type === 'kinematic';
   document.querySelectorAll('.bhKin').forEach((r) => (r.hidden = !kin));
@@ -1875,6 +1877,8 @@ function bindBH() {
   const setbh = (o) => ops([{ op: 'set_bh', ...o }]);
   $('bhLstar').onchange = (e) => setbh({ Lstar: bhNum(e.target.value), fold_mode: 'auto' });
   $('bhContact').onchange = (e) => setbh({ contact: e.target.checked });
+  $('bhCyc').onchange = (e) => setbh(e.target.checked ? { cycles: Math.max(1, Math.round(bhNum($('bhCycN').value) || 3)) } : { cycles: 0, cycle_back: 0 });
+  $('bhCycN').onchange = (e) => { if ($('bhCyc').checked) setbh({ cycles: Math.max(1, Math.round(bhNum(e.target.value) || 1)) }); };
   const selFolds = () => [...BH.sel].filter((k) => (BH.edges.find((c) => ekey(c.edge) === k) || {}).type === 'fold');
   const targets = (n) => {
     const t = $('bhTargets').value.split(/[,\s]+/).filter(Boolean).map(Number);
@@ -1914,7 +1918,6 @@ const BH_EXTRA = [
   ['fold_H', 0, '접힘 힌지 경화', 'N·mm/rad/mm'],
   ['bend_yield', null, '휨 힌지 항복 모멘트', 'N·mm/mm'],
   ['bend_H', 0, '휨 힌지 경화', 'N·mm/rad/mm'],
-  ['cycles', 0, '반복 하중', '회'],
   ['cycle_back', 0, '반복 되돌림 변위', 'mm'],
   ['gap', null, '접촉 간격', 'mm'],
   ['tol', 3, '주름 자동 판정각', '도'],
