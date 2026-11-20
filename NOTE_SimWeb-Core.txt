@@ -1,0 +1,30 @@
+SimWeb-Core 공통 모듈 분리 메모 (2026-11-20)
+
+이 저장소의 코드는 건드리지 않았습니다. 아래 내용은 차후 FEM-LLM-web 을 공통 모듈로 옮길 때 반영할 사항입니다.
+
+1. 무엇을 했나
+- SPH-LLM-web (https://github.com/MunkyunLEE/SPH-LLM-web) 을 시작하면서, 이 저장소 feat/bh-web 브랜치(2026-11-19, 커밋 8930a35)의
+  화면·LLM 연결·지오메트리 입력 부분을 복사해 공통 모듈 Simweb-Core (https://github.com/MunkyunLEE/Simweb-Core) 로 분리했습니다.
+- 목표: FEM, SPH, 이후 LBM 등 여러 시뮬레이터가 같은 화면 디자인(FEM 기준)과 같은 LLM 연결을 쓰고,
+  나중에는 같은 지오메트리를 공유하며 바꿔 불러오는 통합 화면으로 가는 것.
+
+2. 차후 이 저장소에서 옮길 대상 (Simweb-Core 의 대응 위치)
+- femweb/llm.py            -> simweb/llm.py        (SYSTEM 프롬프트는 앱에 남기고 ask_llm(cfg, system, text, ctx, ...) 로 넘김)
+- femweb/server.py 공통부  -> simweb/app.py        (상태·예제·업로드·ops·chat·undo·llm·export/import 엔드포인트, create_app(plugin))
+- femweb/select.py         -> simweb/select.py     (절점 대신 점 배열 + Geometry 그룹)
+- femweb/io_obj.py 읽기부  -> simweb/geometry.py   (Geometry: vertices, faces, face_group, lines, line_group, hinges)
+- femweb/io_stl.py check   -> simweb/geometry.py   (closed(), bodies()). gmsh 사면체 생성은 FEM 전용이라 FEM 에 남김
+- femweb/progress.py       -> simweb/progress.py
+- web/style.css            -> simweb/web/style.css (그대로 복사), theory.html 의 <style> -> simweb/web/theory.css
+- web/app.js 뷰어·그래프·LLM·채팅 부분 -> simweb/web/js/viewer.js, chart.js, panel.js
+- web/vendor (three.js)    -> simweb/web/vendor
+
+3. 옮길 때 바뀌는 점
+- LLM 환경 변수는 SIMWEB_LLM_* 를 공통으로 읽고, 앱 접두사를 앞에 둡니다 (FEM 은 llm.PREFIXES = ["FEMWEB", "SIMWEB"] 로 기존 FEMWEB_LLM_* 그대로 사용 가능)
+- 오른쪽 LLM·채팅 패널은 panel.js 의 mountRight() 로 그려집니다 (마크업 동일)
+- 형상 경계선은 면이 꺾이는 곳만 그립니다 (feature_edges, 20도)
+- Model(FEM 해석용 IR) 은 FEM 에 남기고, Geometry -> Model 변환 함수를 FEM 쪽에 둡니다
+
+4. 하지 않은 것
+- 이 저장소의 어떤 파일도 수정·삭제하지 않았습니다 (이 메모 파일만 추가)
+- 옮기는 작업은 SPH-LLM-web 쪽에서 Simweb-Core 가 안정된 뒤 별도로 진행합니다
