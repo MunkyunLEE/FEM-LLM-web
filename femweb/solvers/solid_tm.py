@@ -166,7 +166,7 @@ def _coupled_linear(model, spec, cps, pts, mids, K, F, mask, val, E, n):
 def solve(model, spec, progress=None):
     if len(model.solids) == 0:
         raise ValueError("TensorMesh 솔버에는 솔리드(STL) 모델이 필요합니다")
-    from ..control import disp_control, record as ctl_record
+    from ..control import disp_control, bc_curve, record as ctl_record
 
     from ..spec import solid_rotations
 
@@ -189,7 +189,7 @@ def solve(model, spec, progress=None):
     if st["type"] == "arclength":
         st["nlgeom"] = True
         if not ctl:
-            pre_notes.append("TensorMesh 어댑터에는 호장법이 없어 하중 제어 비선형 정적 해석으로 풀었습니다. 극한점 이후 거동은 변위 제어를 켜야 따라갑니다")
+            pre_notes.append("TensorMesh 어댑터에는 호장법이 없어 하중 제어 비선형 정적 해석으로 풀었습니다. 극한점 이후 거동은 하중 대신 강제 변위로 주면 따라갑니다")
     if ctl:
         pre_notes += ctl["notes"]
         if not st.get("nlgeom"):
@@ -456,6 +456,7 @@ def solve(model, spec, progress=None):
         crecord(res, spec, hist["time"], cfh)
     if ctl:
         ctl_record(res, ctl, None, cforce, cdisp)
+    bc_curve(res, spec)
     if notes:
         res.summary["참고"] = notes
     res.log = "\n".join(notes)

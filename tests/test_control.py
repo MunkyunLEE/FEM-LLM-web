@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 from helpers import active, load_example
 from femweb import rules
-from femweb.control import disp_control
 from femweb.hinges import with_auto
 from femweb.io_obj import parse_obj, refine
 from femweb.solvers import barhinge, calculix
@@ -52,27 +51,19 @@ def gable(extra):
     return refine(base, spec["divisions"]), base, spec
 
 
-def test_spec_control_adds_and_removes_plot():
+def test_legacy_control_becomes_forced_displacement():
     base, spec = load_example("shell_panel")
-    n = len(spec["plots"])
-    spec, _ = apply_ops(spec, [{"op": "set_step", "type": "static", "control_disp": 2.0}], base)
-    assert spec["step"]["control"] == "displacement"
-    assert any(s["quantity"] == "control.force" for p in spec["plots"] for s in p["series"])
-    spec, _ = apply_ops(spec, [{"op": "set_step", "control": "load"}], base)
-    assert len(spec["plots"]) == n
-
-
-def test_disp_control_modes():
-    base, spec = load_example("shell_panel")
-    spec, _ = apply_ops(spec, [{"op": "set_step", "type": "static", "control": "displacement", "control_disp": 0.5}], base)
-    m = active(base, spec)
-    sp, ctl = disp_control(m, spec)
-    assert ctl["kind"] == "average" and ctl["amp"] == 0.5 and abs(ctl["N"] - 1000.0) < 1e-6
-    assert not sp["loads"]
-    spec, _ = apply_ops(spec, [{"op": "set_step", "control_kind": "rigid"}], base)
-    sp, ctl = disp_control(m, spec)
-    assert ctl["kind"] == "rigid" and ctl["axis"] == 0 and ctl["sign"] == -1.0
-    assert sp["bcs"][0]["id"] == "ctl" and sp["bcs"][0]["value"] == -0.5
+    nb, nl = len(spec["bcs"]), len(spec["loads"])
+    sp, log = apply_ops(spec, [{"op": "set_step", "type": "static", "control_disp": 2.0}], base)
+    assert "control" not in sp["step"] and len(sp["loads"]) == nl - 1 and len(sp["bcs"]) == nb + 1
+    assert abs(sp["bcs"][-1]["value"]) == 2.0 and any("강제 변위" in x for x in log)
+    sp2, _ = apply_ops(sp, [{"op": "set_step", "control_disp": 3.0}], base)
+    assert abs(sp2["bcs"][-1]["value"]) == 3.0 and sp2["bcs"][-1]["value"] * sp["bcs"][-1]["value"] > 0
+    sp3, log = apply_ops(spec, [{"op": "set_step", "control": "load"}], base)
+    assert sp3["loads"] == spec["loads"] and any("없어졌습니다" in x for x in log)
+    old = dict(spec, step=dict(spec["step"], control="displacement", control_disp=1.0, control_kind="average"))
+    sp4, _ = apply_ops(old, [], base)
+    assert "control" not in sp4["step"] and abs(sp4["bcs"][-1]["value"]) == 1.0
 
 
 def test_rules_control_sentences():
@@ -80,7 +71,7 @@ def test_rules_control_sentences():
     ops, _, info = rules.parse("변위제어 5mm로 비선형 해석", base, spec)
     assert info["complete"] and ops == [{"op": "set_step", "nlgeom": True, "control": "displacement", "control_disp": 5.0}]
     ops, _, info = rules.parse("강체 압판으로 변위제어 2mm", base, spec)
-    assert info["complete"] and ops[0]["control_kind"] == "rigid" and ops[0]["control_disp"] == 2.0
+    assert info["complete"] and ops[0]["control_disp"] == 2.0 and "control_kind" not in ops[0]
     ops, _, info = rules.parse("ld1 기준으로 변위제어 1cm", base, spec)
     assert info["complete"] and ops[0]["control_load"] == "ld1" and ops[0]["control_disp"] == 10.0
     assert rules.parse("하중제어로 바꿔", base, spec)[0] == [{"op": "set_step", "control": "load"}]
@@ -120,16 +111,13 @@ def test_barhinge_imperfection_matches_bifurcation_load():
     assert res.history["u.max"][-1] > 2.0
 
 
-def test_barhinge_displacement_control_both_kinds_agree():
-    out = []
-    for kind in ("average", "rigid"):
-        base, spec = column("barhinge", [{"op": "set_step", "type": "static", "increments": 20, "control": "displacement", "control_kind": kind, "control_disp": 2.0}])
-        res = barhinge.solve(base, spec)
-        assert abs(res.history["control.disp"][-1] - 2.0) < 1e-6
-        assert res.history["u.max"][-1] > 5.0
-        out.append(res.history["control.force"][-1])
-    assert abs(out[0] - out[1]) < 1e-3 * abs(out[0])
-    assert 70 < out[0] < 90
+def test_barhinge_forced_displacement_records_curve():
+    base, spec = column("barhinge", [{"op": "set_step", "type": "static", "increments": 20, "control_disp": 2.0}])
+    assert not spec["loads"] and spec["bcs"][-1]["value"] == -2.0
+    res = barhinge.solve(base, spec)
+    assert abs(res.history["control.disp"][-1] - 2.0) < 1e-6
+    assert res.history["u.max"][-1] > 5.0
+    assert 70 < res.history["control.force"][-1] < 90
 
 
 @ccx
@@ -142,12 +130,12 @@ def test_ccx_displacement_control_passes_snap_through():
     assert f[-1] > f[:10].max()
     assert "극한점" in res.summary
     m, base, spec = gable([{"op": "update", "id": "ld1", "vector": [0, 0, -500]}, {"op": "set_step", "type": "static", "nlgeom": True}])
-    with pytest.raises(RuntimeError, match="변위제어"):
+    with pytest.raises(RuntimeError, match="강제 변위"):
         calculix.solve(m, base, spec)
 
 
 @ccx
-def test_ccx_average_control_equals_load_control_when_linear():
+def test_ccx_forced_displacement_linear_stiffness():
     base, spec = load_example("shell_panel")
     spec, _ = apply_ops(spec, [{"op": "set_step", "type": "static", "nlgeom": False}], base)
     m = active(base, spec)

@@ -71,7 +71,8 @@ def test_miura_plot_and_patch_flow():
     assert n >= 6 and abs(res["frames"][-1]["time"] - 1.0) < 1e-9
     r = c.post("/api/chat", json={"text": "접힘각 그래프 그려줘"}).json()
     assert r["stale"] is False
-    p = c.get("/api/plots").json()
+    p = [q for q in c.get("/api/plots").json() if not q["auto"]]
+    assert any(q["auto"] and q["id"] == "auto_fd" for q in c.get("/api/plots").json())
     assert len(p) == 2 and len(p[0]["series"]) == 4 and len(p[0]["series"][0]["x"]) == n
     assert p[1]["series"][0]["y"][-1] > p[1]["series"][0]["y"][0]
     s = post_ops([{"op": "update", "id": "bc4", "value": -10.0}])

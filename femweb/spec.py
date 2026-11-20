@@ -34,7 +34,7 @@ def default_spec(model=None):
         "loads": [],
         "contacts": [],
         "couplings": [],
-        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "imperfection_modes": [], "control": "load", "control_disp": 0.0, "control_load": None, "control_kind": "average", "branch": "auto", "amplitude": "linear", "element": "auto", "device": "auto", "precision": "auto", "threads": 0, "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
+        "step": {"type": "static", "nlgeom": False, "increments": 25, "modes": 5, "imperfection": 0.0, "imperfection_modes": [], "branch": "auto", "amplitude": "linear", "element": "auto", "device": "auto", "precision": "auto", "threads": 0, "damping": {"kind": "none", "zeta": 0.0, "alpha": 0.0, "beta": 0.0, "time": 0.0}},
         "plots": [],
     }
 
@@ -123,8 +123,53 @@ def _coupling_fields(item, op, model, merge=False):
         item["rigid"] = True
 
 
+CONTROL_KEYS = ("control", "control_disp", "control_load", "control_kind")
+
+
+def _forced(spec, op, model, log):
+    c = str(op.get("control") or "").lower()
+    amp = abs(_num(op.get("control_disp") or 0.0, "control_disp"))
+    if c == "load" or (c != "displacement" and amp <= 0):
+        log.append("변위 제어 옵션은 없어졌습니다. 강제 변위는 하중 대신 구속 값으로 주세요 (예: 위에 z -20 mm)")
+        return
+    want = op.get("control_load")
+    cands = [ld for ld in spec["loads"] if ld["type"] == "force" and (not want or ld["id"] == want)]
+    if cands:
+        ld = cands[0]
+        v = [float(x) for x in ld["vector"]]
+        ax = max(range(3), key=lambda i: abs(v[i]))
+        if v[ax] == 0:
+            raise ValueError(f"하중 {ld['id']} 의 크기가 0 이라 강제 변위 방향을 정할 수 없습니다")
+        if amp <= 0:
+            if model is None:
+                raise ValueError("강제 변위 크기(mm)를 알려주세요 (예: 변위 20 mm)")
+            amp = 0.05 * float(model.diag())
+        val = amp if v[ax] > 0 else -amp
+        spec["loads"] = [x for x in spec["loads"] if x["id"] != ld["id"]]
+        item = {"id": _next_id(spec["bcs"], "bc"), "name": "강제 변위", "select": ld["select"], "dofs": [ax + 1], "value": val}
+        spec["bcs"].append(item)
+        log.append(f"변위 제어 옵션은 없어져 하중 {ld['id']} 을(를) 같은 절점의 강제 변위 {item['id']} ({'xyz'[ax]} {val:g} mm) 로 바꿨습니다")
+        return
+    mv = [b for b in spec["bcs"] if abs(float(b.get("value", 0.0))) > 0]
+    if len(mv) == 1 and amp > 0:
+        mv[0]["value"] = amp if mv[0]["value"] > 0 else -amp
+        log.append(f"강제 변위 {mv[0]['id']} 의 크기를 {mv[0]['value']:g} mm 로 바꿨습니다")
+        return
+    if len(mv) > 1:
+        raise ValueError("강제 변위가 여러 개입니다. 어느 구속의 값을 바꿀지 알려주세요 (예: bc3 값 -20)")
+    raise ValueError("강제 변위는 하중 대신 구속 값으로 줍니다 (예: 위에 z -20 mm)")
+
+
 def apply_ops(spec, ops, model=None):
     spec = copy.deepcopy(spec)
+    old = spec.get("step", {})
+    if old.get("control") == "displacement":
+        try:
+            _forced(spec, {k: old.get(k) for k in CONTROL_KEYS}, model, [])
+        except ValueError:
+            pass
+    for k in CONTROL_KEYS:
+        old.pop(k, None)
     spec.setdefault("contacts", [])
     spec.setdefault("creases", {})
     spec.setdefault("bh", {})
@@ -450,21 +495,8 @@ def apply_ops(spec, ops, model=None):
                         raise ValueError("결함 모드 번호는 1~50 이어야 합니다")
                     lst.append([n, v])
                 st["imperfection_modes"] = lst
-            if "control" in op:
-                c = str(op["control"] or "load").lower()
-                if c not in ("load", "displacement"):
-                    raise ValueError("control 은 load 또는 displacement 여야 합니다")
-                st["control"] = c
-            if "control_disp" in op:
-                st["control_disp"] = abs(_num(op["control_disp"] or 0.0, "control_disp"))
-                if "control" not in op and st["control_disp"] > 0:
-                    st["control"] = "displacement"
-            if "control_kind" in op:
-                if op["control_kind"] not in ("average", "rigid"):
-                    raise ValueError("control_kind 는 average 또는 rigid 여야 합니다")
-                st["control_kind"] = op["control_kind"]
-            if "control_load" in op:
-                st["control_load"] = op["control_load"] or None
+            if any(f in op for f in CONTROL_KEYS):
+                _forced(spec, op, model, log)
             if "element" in op:
                 if op["element"] not in ("auto", "tri", "quad"):
                     raise ValueError("element 는 auto, tri, quad 중 하나여야 합니다")
@@ -500,10 +532,6 @@ def apply_ops(spec, ops, model=None):
                 if op["branch"] not in ("auto", "primary"):
                     raise ValueError("branch 는 auto 또는 primary 여야 합니다")
                 st["branch"] = op["branch"]
-            if st.get("control") == "displacement" and not any(s2.get("quantity") == "control.force" for pl in spec["plots"] for s2 in pl.get("series", [])):
-                spec["plots"].append({"id": _next_id(spec["plots"], "pl"), "title": "하중-변위 곡선 (변위 제어)", "x": {"quantity": "control.disp"}, "series": [{"quantity": "control.force"}]})
-            if st.get("control") != "displacement":
-                spec["plots"] = [pl for pl in spec["plots"] if not any(s2.get("quantity") == "control.force" for s2 in pl.get("series", []))]
             log.append("스텝 설정")
         elif k == "set_solver":
             if op.get("solver") not in SOLVERS:
@@ -623,11 +651,6 @@ def warnings_for(spec, model):
         if spec["step"]["type"] in ("buckle", "modal"):
             out.append("접촉은 정적 스텝에서만 적용됩니다")
     st = spec["step"]
-    if st.get("control") == "displacement":
-        if st["type"] in ("buckle", "modal"):
-            out.append("변위 제어는 정적·호장법 스텝에서만 쓰입니다 (좌굴·모달에서는 무시)")
-        elif not any(ld["type"] in ("force", "pressure") for ld in spec["loads"]):
-            out.append("변위 제어에는 기준이 되는 힘 또는 압력 하중이 필요합니다")
     moving = any(abs(b.get("value", 0.0)) > 0 for b in spec["bcs"])
     moving = moving or any(c["type"] == "rigid" and any(float(v) != 0 for v in c.get("motion", [])) for c in spec.get("contacts") or [])
     moving = moving or any(any(float(v) != 0 for v in cp.get("fix", {}).values()) or any(cp.get("force", [0, 0, 0])) or any(cp.get("moment", [0, 0, 0])) for cp in spec.get("couplings") or [])

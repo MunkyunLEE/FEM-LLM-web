@@ -759,7 +759,7 @@ def solve(model, base, spec, progress=None):
     if st["type"] == "arclength":
         step["nlgeom"] = True
         if not ctl:
-            notes.append("CalculiX에는 호장법이 없어 하중 제어 비선형 정적 해석으로 풀었습니다. 극한점 이후 거동은 변위 제어를 켜야 따라갑니다")
+            notes.append("CalculiX에는 호장법이 없어 하중 제어 비선형 정적 해석으로 풀었습니다. 극한점 이후 거동은 하중 대신 강제 변위로 주면 따라갑니다")
     nlg = bool(st.get("nlgeom")) or st["type"] == "arclength"
     if ctl and ctl["kind"] == "average":
         ctl["k"] = machine_stiffness(model, base, spec, ctl)
@@ -795,7 +795,7 @@ def solve(model, base, spec, progress=None):
         frd, dat, out = run_ccx(inp)
     except RuntimeError as e:
         if "increment size smaller" in str(e) and kind == "static" and not ctl:
-            raise RuntimeError("하중 제어 비선형 해석이 극한점(좌굴·스냅스루) 부근에서 더 나아가지 못했습니다. '변위제어'를 켜면 그 이후 거동까지 따라갑니다\n" + str(e))
+            raise RuntimeError("하중 제어 비선형 해석이 극한점(좌굴·스냅스루) 부근에서 더 나아가지 못했습니다. 하중 대신 강제 변위(예: 위에 z -20 mm)로 주면 그 이후 거동까지 따라갑니다\n" + str(e))
         raise
     nodes, elems, blocks = parse_frd(frd)
     hide = set(meta.get("hinge_elems", []))
@@ -947,6 +947,9 @@ def solve(model, base, spec, progress=None):
                     record(res, ctl, None, cf[-len(times) :], cq[-len(times) :])
             elif len(cforce) == len(times):
                 record(res, ctl, times, cforce)
+        from ..control import bc_curve
+
+        bc_curve(res, spec)
     elif kind == "buckle":
         res.history["mode"] = list(range(1, len(factors) + 1))
         res.history["buckling.factor"] = factors

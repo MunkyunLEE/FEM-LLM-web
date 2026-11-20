@@ -581,7 +581,7 @@ def build(model, spec):
 
 
 def solve(model, spec, progress=None):
-    from ..control import disp_control, record as ctl_record
+    from ..control import disp_control, bc_curve, record as ctl_record
 
     if not model.shells:
         raise ValueError("바-힌지 솔버에는 면(f) 패널이 필요합니다")
@@ -734,6 +734,7 @@ def solve(model, spec, progress=None):
     }
     if ctl:
         ctl_record(res, ctl, None, cforce, cdisp)
+    bc_curve(res, spec)
     if len(counts) == len(frames) and max(counts) > 0:
         res.summary["불안정 구간"] = f"접선 강성에 음의 고유치가 있는 프레임 {sum(1 for c in counts if c > 0)}개 (하중 제어로는 유지할 수 없는 평형)"
     if msgs:

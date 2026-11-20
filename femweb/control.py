@@ -71,8 +71,8 @@ def record(res, info, times, forces, disps=None):
     f = [float(v) for v in forces]
     res.history["control.disp"] = d
     res.history["control.force"] = f
-    res.summary["제어 변위 끝값 (mm)"] = round(d[-1], 6) if d else 0.0
-    res.summary["제어점 하중 끝값 (N)"] = round(f[-1], 4) if f else 0.0
+    res.summary["강제 변위 끝값 (mm)"] = round(d[-1], 6) if d else 0.0
+    res.summary["강제 변위 반력 끝값 (N)"] = round(f[-1], 4) if f else 0.0
     if not f:
         return
     k = next((i for i in range(1, len(f) - 1) if f[i] > f[i - 1] and f[i] > f[i + 1] and f[i] > 0), None)
@@ -83,4 +83,25 @@ def record(res, info, times, forces, disps=None):
         res.summary["극한점"] = f"하중이 변위 {d[k]:.4g} mm 에서 {f[k]:.5g} N 을 찍고 내려갑니다 (좌굴 또는 스냅스루). 증분 사이 값이라 실제 극한 하중은 이보다 조금 클 수 있습니다"
     else:
         m = int(np.argmax(f))
-        res.summary["제어점 하중 최댓값 (N) @ 변위 (mm)"] = [round(f[m], 4), round(d[m], 6)]
+        res.summary["강제 변위 반력 최댓값 (N) @ 변위 (mm)"] = [round(f[m], 4), round(d[m], 6)]
+
+
+def bc_curve(res, spec):
+    h = res.history
+    if h.get("control.force") or spec["step"].get("type") not in ("static", "arclength"):
+        return
+    mv = [b for b in spec["bcs"] if abs(float(b.get("value", 0.0))) > 0 and any(int(d) <= 3 for d in b["dofs"])]
+    if not mv:
+        return
+    b = max(mv, key=lambda x: abs(float(x["value"])))
+    d = next(int(q) for q in b["dofs"] if int(q) <= 3)
+    nm = "xyz"[d - 1]
+    f = h.get(f"reaction.{b['id']}.{nm}") or (h.get(f"reaction.{nm}") if len(mv) == 1 else None)
+    lam = h.get("load_factor") or h.get("time")
+    if not f or not lam or len(f) != len(lam):
+        return
+    v = float(b["value"])
+    s = 1.0 if v > 0 else -1.0
+    record(res, {"amp": abs(v)}, None, [s * float(x) for x in f], [abs(v) * float(t) for t in lam])
+    if len(mv) > 1:
+        res.summary["강제 변위 기준"] = f"강제 변위가 여러 개라 가장 큰 {b['id']} ({nm} {v:g} mm) 의 반력으로 하중-변위를 기록했습니다"

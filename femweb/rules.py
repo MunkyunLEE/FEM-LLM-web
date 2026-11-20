@@ -490,7 +490,7 @@ HELP = (
     "강제변위: 'x 최대 면을 x 방향으로 -5 mm'. 재료·단면: '알루미늄으로', '두께 2 mm', '보 단면 20x40'. "
     "힌지: '쉘 사이 공유 엣지를 핀 조인트로', '힌지 강성 0.05'. 해석: '좌굴 모드 4개', '비선형 증분 30', '해석 실행'. "
     "접촉: '반지름 20 구를 아래로 3 mm 눌러, 마찰 0.2', '바닥에 강체 평면 접촉', 'body_1 과 body_2 사이 접촉 마찰 0.3', '마찰계수 0.1', '접촉 삭제'. "
-    "좌굴 후 거동: '변위제어 5 mm', '초기결함 0.1', '강체 압판으로 변위제어', '하중제어로', '분기 전환 꺼줘'. "
+    "좌굴 후 거동: '위에 z -20 mm' (강제 변위, 하중-변위 곡선 자동), '초기결함 0.1', '분기 전환 꺼줘'. "
     "그래프: '시간-총에너지 그래프', '하중-변위 곡선'. 수정: 'ld1 2배', 'bc2 삭제', '되돌려'."
 )
 
@@ -510,8 +510,8 @@ def parse_plot(c, model, spec, ctx):
     sel, _ = selection(cc, model, spec, ctx)
     series = []
     title = []
-    if ld and spec["step"].get("control") == "displacement" and not axm:
-        return {"op": "add_plot", "title": "하중-변위 곡선 (변위 제어)", "x": {"quantity": "control.disp"}, "series": [{"quantity": "control.force"}]}
+    if ld and any(abs(float(b.get("value", 0.0))) > 0 for b in spec["bcs"]) and not axm:
+        return {"op": "add_plot", "title": "하중-변위 곡선 (강제 변위)", "x": {"quantity": "control.disp"}, "series": [{"quantity": "control.force"}]}
     if ld:
         a = axm.group(1) if axm else None
         if a is None:
@@ -946,12 +946,7 @@ def parse_clause(text, model, spec, ctx):
             c.takeall(r"켜(?:고|서)?|적용|사용|으로|로")
     elif c.take(r"하중\s*제어|load\s*-?\s*control(?:led)?"):
         st["control"] = "load"
-    if c.take(r"강체\s*압판|압판|platen|rigid\s*(?:plate|platen)|똑같이\s*밀"):
-        st["control_kind"] = "rigid"
-        st.setdefault("control", "displacement")
-    elif c.take(r"하중\s*분포\s*(?:를)?\s*유지|평균\s*변위|분포\s*유지"):
-        st["control_kind"] = "average"
-        st.setdefault("control", "displacement")
+    c.takeall(r"강체\s*압판(?:으로)?|(?<![가-힣])압판(?:으로)?|platen|rigid\s*(?:plate|platen)")
     if c.has(r"감쇠|댐핑|damping|레일리|rayleigh"):
         dm = {}
         if c.take(r"(?:감쇠|댐핑|damping)\s*(?:를|을|는|은)?\s*(?:없이|없애|끄|꺼|해제|off|0\s*(?:으로|로)?(?![.\d]))|no damping|without damping"):
@@ -1426,7 +1421,7 @@ def parse_clause(text, model, spec, ctx):
             elif v is None:
                 ask.append("변위 방향을 알려주세요 (예: x 방향으로 -5 mm, 아래로 3 mm)")
             else:
-                ops.append({"op": "add_bc", "name": "지정 변위", "select": sel, "dofs": [a + 1], "value": round(v + 0.0, 9)})
+                ops.append({"op": "add_bc", "name": "강제 변위", "select": sel, "dofs": [a + 1], "value": round(v + 0.0, 9)})
         else:
             ask.append("변위 크기를 mm로 알려주세요")
         if sel is not None and not inherited:
@@ -1590,13 +1585,9 @@ def describe_op(o):
         if o.get("imperfection_modes"):
             s.append("초기결함 " + " + ".join(f"{n}차 모드 x {v:g} mm" for n, v in o["imperfection_modes"]))
         if "control" in o:
-            s.append("변위 제어" if o["control"] == "displacement" else "하중 제어")
+            s.append("강제 변위로 바꿈" if o["control"] == "displacement" else "하중 제어")
         if o.get("control_disp"):
-            s.append(f"목표 변위 {o['control_disp']:g} mm")
-        if o.get("control_load"):
-            s.append(f"기준 하중 {o['control_load']}")
-        if "control_kind" in o:
-            s.append("강체 압판" if o["control_kind"] == "rigid" else "하중 분포 유지")
+            s.append(f"강제 변위 {o['control_disp']:g} mm")
         if "branch" in o:
             s.append("분기 전환 " + ("켬" if o["branch"] == "auto" else "끔"))
         if "damping" in o:

@@ -415,7 +415,7 @@ def run_solver():
     JOB["stage"] = None
     sp = S["spec"]
     mv = [abs(float(v)) for c in sp.get("contacts") or [] if c.get("type") == "rigid" for v in c.get("motion", [])]
-    JOB["info"] = {"solver": sp["solver"], "increments": int(sp["step"].get("increments") or 0), "travel": max(mv) if mv else (float(sp["step"].get("control_disp") or 0.0) if sp["step"].get("control") == "displacement" else 0.0)}
+    JOB["info"] = {"solver": sp["solver"], "increments": int(sp["step"].get("increments") or 0), "travel": max(mv) if mv else max([abs(float(b.get("value", 0.0))) for b in sp["bcs"]] + [0.0])}
     proc.start()
     JOB["proc"] = proc
     child.close()
@@ -588,7 +588,7 @@ def get_plots():
             return out
         from . import compare
 
-        auto = plots.bh_defaults(S["result"]) if getattr(S["result"], "solver", "") == "bh" else []
+        auto = plots.bh_defaults(S["result"]) if getattr(S["result"], "solver", "") == "bh" else plots.force_defaults(S["result"], S["spec"])
         for p in auto + S["spec"]["plots"]:
             try:
                 q = plots.evaluate(p, S["result"], active())

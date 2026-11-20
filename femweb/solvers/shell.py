@@ -1317,7 +1317,7 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
         with open(resume, "rb") as f:
             ck = pickle.load(f)
     from ..contact import contacts_of, icosphere, plane_basis, unit, record as contact_record, view_spec
-    from ..control import disp_control, record as ctl_record
+    from ..control import disp_control, bc_curve, record as ctl_record
     from ..loads import bc_table, lumped
     from ..result import Result
     from ..select import resolve
@@ -1778,6 +1778,7 @@ def _solve_model(model, spec, progress=None, checkpoint=None, resume=None, every
             contact_record(res, spec, hist["time"], rig)
     if ctl:
         ctl_record(res, ctl, None, cforce, cdisp)
+    bc_curve(res, spec)
     res.summary["참고"] = msgs
     res.log = "\n".join(msgs)
     return res

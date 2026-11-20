@@ -872,13 +872,7 @@ function renderControls() {
   $('increments').value = s.step.increments;
   $('modes').value = s.step.modes;
   $('imperfection').value = s.step.imperfection || 0;
-  $('control').value = s.step.control || 'load';
-  $('controlDisp').value = s.step.control_disp || 0;
-  $('controlKind').value = s.step.control_kind || 'average';
   $('branch').checked = (s.step.branch || 'auto') !== 'primary';
-  const dc = s.step.control === 'displacement' && (s.step.type === 'static' || s.step.type === 'arclength');
-  $('controlDisp').disabled = !dc;
-  $('controlKind').disabled = !dc;
   $('branch').disabled = s.solver !== 'barhinge';
   const dm = s.step.damping || { kind: 'none' };
   $('dampKind').value = dm.kind === 'direct' ? 'rayleigh' : dm.kind || 'none';
@@ -1524,9 +1518,6 @@ function bind() {
   $('increments').onchange = (e) => ops([{ op: 'set_step', increments: +e.target.value || 1 }]);
   $('modes').onchange = (e) => ops([{ op: 'set_step', modes: +e.target.value || 1 }]);
   $('imperfection').onchange = (e) => ops([{ op: 'set_step', imperfection: +e.target.value || 0 }]);
-  $('control').onchange = (e) => ops([{ op: 'set_step', control: e.target.value }]);
-  $('controlDisp').onchange = (e) => ops([{ op: 'set_step', control: 'displacement', control_disp: Math.abs(+e.target.value) || 0 }]);
-  $('controlKind').onchange = (e) => ops([{ op: 'set_step', control_kind: e.target.value }]);
   $('branch').onchange = (e) => ops([{ op: 'set_step', branch: e.target.checked ? 'auto' : 'primary' }]);
   $('dampKind').onchange = (e) => ops([{ op: 'set_step', damping: { kind: e.target.value } }]);
   $('dampZeta').onchange = (e) => ops([{ op: 'set_step', damping: { zeta: Math.max(0, +e.target.value || 0) } }]);
@@ -1703,7 +1694,7 @@ function drawCreases() {
 function renderBH() {
   const on = !!st && !!st.spec && st.spec.solver === 'bh';
   $('bhPanel').hidden = !on;
-  for (const id of ['control', 'controlKind', 'dampKind', 'element', 'device', 'matH', 'hingeK', 'hingeAuto']) {
+  for (const id of ['branch', 'dampKind', 'element', 'device', 'matH', 'hingeK', 'hingeAuto']) {
     const r = $(id) && $(id).closest('.row');
     if (r) r.classList.toggle('bhhide', on);
   }

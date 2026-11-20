@@ -20,7 +20,7 @@
 - `femweb/rules.py`: 한국어·영어 문장 → ops 규칙 해석기. 새 문장 패턴은 여기에 추가하고 `tests/test_rules.py` 에 시험 추가
 - `femweb/llm.py`: OpenAI 호환 `/chat/completions` 호출(프록시·사내 인증서 지원). 엔드포인트가 비어 있으면 LLM 미사용
 - `femweb/solvers/`: `calculix.py`(ccx 입력 생성·실행), `barhinge.py`, `solid_tm.py`(TensorMesh), `shell.py`(자체 쉘: 삼각형 요소, Newton, IPC 접촉, 감쇠, 탄소성, 재개, `solve` 어댑터), `shell_quad.py`(4절점 쿼드 요소)
-- `femweb/contact.py`, `control.py`(변위 제어), `loads.py`, `select.py`(절점 선택), `plots.py`, `result.py`
+- `femweb/contact.py`, `control.py`(변위 제어 옵션은 없앰: 누르기는 구속 값으로 주는 강제 변위. `bc_curve` 가 강제 변위 반력으로 `control.disp`·`control.force` 와 극한 하중을 기록, 화면에 기본 그래프 `auto_fd`. 예전 `control` 스펙·문장은 `spec._forced` 가 강제 변위로 바꿈), `loads.py`, `select.py`(절점 선택), `plots.py`, `result.py`
 - `web/`: `index.html`, `app.js`(three.js 뷰어), `theory.html`(원리 문서, 기능을 바꾸면 같이 갱신) + `theory.js`(three.js·캔버스 실습 위젯, `data-lab` 자리에 붙음)
 - `examples/make_examples.py` → `examples/presets.json` 과 예제 OBJ/STL 생성. 예제를 바꾸면 `tests/test_api.py::test_examples_listed` 도 갱신
 

@@ -35,8 +35,8 @@ LABELS = {
     "contact.force": "접촉력 (N)",
     "contact.normal": "접촉 수직력 합 (N)",
     "contact.friction": "접촉 마찰력 합 (N)",
-    "control.disp": "제어 변위 (mm)",
-    "control.force": "제어점 하중 (N)",
+    "control.disp": "강제 변위 (mm)",
+    "control.force": "강제 변위 반력 (N)",
     "stability.negative": "음의 고유치 수",
     "vonMises.max": "최대 von Mises (MPa)",
     "fold.mean": "평균 접힘각 (도)",
@@ -124,3 +124,10 @@ def bh_defaults(result):
     elif "load_factor" in h and "u.max" in h:
         out.append({"id": "auto_ld", "title": "하중계수-최대 변위", "x": {"quantity": "u.max"}, "series": [{"quantity": "load_factor", "name": "하중계수"}], "auto": True})
     return out
+
+
+def force_defaults(result, spec):
+    h = result.history
+    if not h.get("control.force") or any(s2.get("quantity") == "control.force" for p in spec.get("plots", []) for s2 in p.get("series", [])):
+        return []
+    return [{"id": "auto_fd", "title": "하중-변위 (강제 변위)", "x": {"quantity": "control.disp"}, "series": [{"quantity": "control.force", "name": "반력"}], "auto": True}]
